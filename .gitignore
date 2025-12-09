@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.p
+*.log
+samples.csv
+samples_safe.csv
+samples*.csv
+*.bak
