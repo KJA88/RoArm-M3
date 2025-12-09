@@ -1,0 +1,48 @@
+{
+    "MISSION_NAME": "PickAndPlace_Velo_Control",
+    "G_OPEN": 0.5,
+    "G_CLOSED": 3.0,
+    "DEFAULT_DURATION_S": 2.0,
+    "WAYPOINTS": [
+        {
+            "x": 200, "y": 0, "z": 200, "r": 0.0, "g": 0.5, 
+            "desc": "Home Start", "duration_s": 1.0
+        },
+        {
+            "x": 50, "y": 0, "z": 250, "r": 0.0, "g": 0.5, 
+            "desc": "Approach A (Hover)", "duration_s": 1.5
+        },
+        {
+            "x": 50, "y": 0, "z": 200, "r": 0.0, "g": 0.5, 
+            "desc": "Pick A (Down)"
+        },
+        {
+            "x": 50, "y": 0, "z": 200, "r": 0.0, "g": 3.0, 
+            "desc": "Grip (Action)", "duration_s": 0.5 
+        },
+        {
+            "x": 50, "y": 0, "z": 280, "r": 0.0, "g": 3.0, 
+            "desc": "Lift (Clearance)", "duration_s": 1.5
+        },
+        {
+            "x": 300, "y": 150, "z": 280, "r": 0.0, "g": 3.0, 
+            "desc": "Approach B (Travel)"
+        },
+        {
+            "x": 300, "y": 150, "z": 50, "r": 0.0, "g": 3.0, 
+            "desc": "Drop B (Lower)"
+        },
+        {
+            "x": 300, "y": 150, "z": 50, "r": 0.0, "g": 0.5, 
+            "desc": "Release (Action)", "duration_s": 0.5
+        },
+        {
+            "x": 300, "y": 150, "z": 180, "r": 0.0, "g": 0.5, 
+            "desc": "Retreat (Clearance)", "duration_s": 1.5
+        },
+        {
+            "x": 200, "y": 0, "z": 200, "r": 0.0, "g": 0.5, 
+            "desc": "Return home", "duration_s": 1.0
+        }
+    ]
+}

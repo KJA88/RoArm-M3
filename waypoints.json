@@ -1,0 +1,27 @@
+{
+    "mission_name": "FINAL_JOINT_TEST",
+    "waypoints": [
+        {
+            "T": 102,
+            "base": 0.5,
+            "shoulder": 1.0,
+            "elbow": 1.57,
+            "wrist": 0.0,
+            "roll": 0.0,
+            "hand": 1.0,
+            "spd": 0.5,
+            "dwell_time": 2.0
+        },
+        {
+            "T": 102,
+            "base": -0.5,
+            "shoulder": 0.5,
+            "elbow": 0.5,
+            "wrist": 0.0,
+            "roll": 0.0,
+            "hand": 2.0,
+            "spd": 0.5,
+            "dwell_time": 2.0
+        }
+    ]
+}

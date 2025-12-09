@@ -1,0 +1,22 @@
+{
+    "MISSION_NAME": "AccurateTest",
+    "DEFAULT_DURATION_S": 1.2,  <-- CHANGED TO 1.2 SECONDS
+    "WAYPOINTS": [
+        {
+            "x": 200, "y": 0, "z": 200, "r": 0.0, "g": 0.5, 
+            "desc": "Home Start", "duration_s": 0.5
+        },
+        {
+            "x": 250, "y": 0, "z": 150, "r": 0.0, "g": 0.5, 
+            "desc": "Approach Fast"
+        },
+        {
+            "x": 150, "y": 150, "z": 150, "r": 0.0, "g": 3.0, 
+            "desc": "Swing Grip Fast"
+        },
+        {
+            "x": 200, "y": 0, "z": 100, "r": 0.0, "g": 3.0, 
+            "desc": "Safe Shutdown"
+        }
+    ]
+}

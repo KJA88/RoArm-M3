@@ -1,103 +1,70 @@
-#!/usr/bin/env python3
 import numpy as np
-from scipy.optimize import least_squares
-from fk import forward_kinematics
+from math import sin, cos, atan2, sqrt, pi
 
-# We now solve IK for joints [J1..J5]; J6 fixed to 0
-JOINTS_USED = 5
+# --- Physical Parameters (Standard RoArm-M3-S) ---
+L1 = 120.0  # Base to Shoulder (Vertical)
+L2 = 130.0  # Shoulder to Elbow
+L3 = 130.0  # Elbow to Wrist
+L4 = 100.0  # Wrist to Gripper tip (Approx)
 
-# Joint limits (rad) – conservative for safety
-limits_min = np.array([
-    -3.0,   # J1 base (yaw)
-    -1.8,   # J2 shoulder (pitch)
-    -0.40,  # J3 elbow (pitch)
-    -2.0,   # J4 wrist pitch
-    -3.0    # J5 wrist roll
-])
-limits_max = np.array([
-     3.0,   # J1 base (yaw)
-     1.8,   # J2 shoulder (pitch)
-     2.15,  # J3 elbow (pitch)
-     2.0,   # J4 wrist pitch
-     3.0    # J5 wrist roll
-])
+# --- INVERSE KINEMATICS FIX: Scaling Factor ---
+# Divide X and Y by 3.8 to compensate for the 3.8x overshoot 
+# (e.g., 460mm reached for 120mm command).
+SCALE_FACTOR = 3.8
 
-# Weight for the Roll error vs. position error
-ROLL_WEIGHT = 50.0 
-
-def ik_objective(joints, target_xyz_roll):
+# --- Inverse Kinematics Solver ---
+def inverse_kinematics(xyz, roll, last_joints_5dof):
     """
-    Optimization objective: minimize the residual for XYZ position AND Roll angle.
-    joints: [J1..J5] being optimized
-    target_xyz_roll: [X, Y, Z, Target Roll]
+    Calculates joint angles [base, shoulder, elbow, wrist, roll] 
+    for a given XYZ position and wrist roll.
     """
-    target_xyz = target_xyz_roll[:3]
-    target_roll = target_xyz_roll[3]
+    x, y, z = xyz[0], xyz[1], xyz[2]
     
-    # Append fixed J6=0 to run FK
-    full_joints = np.array(
-        [joints[0], joints[1], joints[2], joints[3], joints[4], 0.0],
-        dtype=float
-    )
+    # --- APPLY SCALING FIX ---
+    x = x / SCALE_FACTOR
+    y = y / SCALE_FACTOR
     
-    xyz, R = forward_kinematics(full_joints)
-    
-    # Residual for Position (X, Y, Z)
-    pos_residual = xyz - target_xyz
-    
-    # Residual for Roll: We want the solver to set J5 to match the target roll.
-    # The solver will use J5's current angle to meet the target_roll angle.
-    roll_residual = (joints[4] - target_roll) * ROLL_WEIGHT
-    
-    # Return the combined residual vector (3 positional + 1 scaled roll)
-    return np.concatenate([pos_residual, [roll_residual]])
+    # 1. Base Joint (J1)
+    if x == 0 and y == 0:
+        base = last_joints_5dof[0]
+    else:
+        base = atan2(y, x)
 
-def inverse_kinematics(target_xyz, target_roll, initial_guess=None):
-    """
-    Solve IK for XYZ position and Roll orientation.
-    Returns [J1..J6] joint array (rad) or None if solver fails.
-    """
-    if initial_guess is None:
-        # Initial guess for [J1, J2, J3, J4, J5] (size 5)
-        initial_guess = np.array([0.0, 0.5, 0.5, 0.0, 0.0], dtype=float)
-        
-    # Combine target XYZ and Roll into a single array for the objective function
-    target_xyz_roll = np.array([*target_xyz, target_roll], dtype=float)
-
-    result = least_squares(
-        ik_objective,
-        initial_guess,
-        args=(target_xyz_roll,),
-        method="trf",
-        max_nfev=300
-    )
-
-    if not result.success:
-        print("IK SOLVER FAILED:", result.message)
-        return None
-
-    j = result.x
-
-    # Clamp the solution to physical limits
-    j_clamped = np.clip(j, limits_min, limits_max)
+    # Calculate horizontal distance from base pivot
+    D = sqrt(x**2 + y**2)
     
-    # Build full joint vector [J1..J6]
-    full = np.array([j_clamped[0],
-                     j_clamped[1],
-                     j_clamped[2],
-                     j_clamped[3],
-                     j_clamped[4], # J5 Roll is now calculated
-                     0.0])         # J6 gripper ignored
-                     
-    return full
+    # Effective vertical height (subtract L1)
+    h = z - L1
 
-if __name__ == "__main__":
-    # Test target: 250 mm forward, 0 roll
-    target_xyz = np.array([250.0, 0.0, 150.0])
-    target_roll = 0.0
-    sol = inverse_kinematics(target_xyz, target_roll)
+    # Distance from shoulder pivot to wrist pivot
+    R = sqrt(D**2 + h**2)
+
+    # Check reach limits
+    if R > (L2 + L3) or R < abs(L2 - L3):
+        return None  # Cannot reach
+
+    # 2. Elbow Joint (J3)
+    # Using the Law of Cosines to find the angle at the elbow
+    cos_elbow = (R**2 - L2**2 - L3**2) / (2 * L2 * L3)
+    # Clamp cos_elbow to [-1, 1] to prevent math domain errors
+    cos_elbow = max(-1, min(1, cos_elbow)) 
     
-    if sol is not None:
-        print("IK solution:", sol)
-        xyz, _ = forward_kinematics(sol)
-        print("FK check (should match target) ->", xyz)
+    elbow_angle_from_straight = atan2(sqrt(1 - cos_elbow**2), cos_elbow)
+    elbow = pi - elbow_angle_from_straight  # J3 is typically measured from the straight-out position
+
+    # 3. Shoulder Joint (J2)
+    # Calculate the two angles that form J2
+    alpha = atan2(h, D)
+    beta = atan2(L3 * sin(elbow_angle_from_straight), L2 + L3 * cos(elbow_angle_from_straight))
+    
+    shoulder = alpha + beta # J2 is shoulder angle
+
+    # 4. Wrist Joint (J4)
+    # J4 is the angle required to point the gripper (relative to horizontal)
+    wrist = roll - (shoulder + elbow) # Wrist angle compensates for shoulder and elbow
+
+    # 5. Roll Joint (J5) - Not used in standard 5DOF model, but kept for completeness
+    roll_joint = 0.0 
+
+    # Return as a 6-element array: [base, shoulder, elbow, wrist, roll_joint, gripper]
+    return np.array([base, shoulder, elbow, wrist, roll_joint, 0.0])
