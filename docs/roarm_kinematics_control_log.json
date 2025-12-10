@@ -1,11 +1,12 @@
 {
   "doc_type": "RoArm_M3S_Kinematics_and_Control_Log",
-  "version": "1.1",
-  "date_local": "2025-12-08",
+  "version": "1.2",
+  "date_local": "2025-12-09",
 
   "purpose": [
     "Persist everything learned so far so another AI or human can pick up without breaking progress.",
-    "Especially: coordinate system origin, joint sign conventions, serial/JSON command details, calibration strategy, and failure modes."
+    "Capture: coordinate system origin, joint sign conventions, serial/JSON command details, calibration strategy, and failure modes.",
+    "Serve as the single source of truth for how this RoArm-M3S system is supposed to behave."
   ],
 
   "hardware_and_connection": {
@@ -15,8 +16,8 @@
       "port_examples": ["/dev/ttyUSB0"],
       "baud": 115200,
       "notes": [
-        "Serial must send one JSON object per line, newline-terminated.",
-        "In Python/pyserial we used dsrdtr=None and explicitly set RTS/DTR false to avoid weird resets/handshakes."
+        "Serial must send one JSON object per line, newline-terminated ('\\n').",
+        "In Python/pyserial we used dsrdtr=None and explicitly set RTS/DTR False to avoid weird resets/handshakes."
       ]
     }
   },
@@ -123,7 +124,7 @@
 
   "joint_conventions": {
     "non_negotiables": [
-      "Do NOT 'correct' mechanical zero by assumption. If the arm isn’t perfectly aligned at zero, handle it via calibration offsets.",
+      "Do NOT 'correct' mechanical zero by assumption. If the arm is not perfectly aligned at zero, handle it via calibration offsets.",
       "Use firmware feedback (b,s,e,t,r,g) as the authoritative definition of the current 'zero'."
     ],
     "elbow_zero_behavior": {
@@ -151,7 +152,6 @@
       "decision": "This ~5 mm error is ACCEPTABLE for now and is sufficient for vision-based picking with an approach-from-above strategy.",
       "refine_behavior": "Current 'simple refine' in roarm_simple_move.py uses the same model and does NOT improve error; it is intentionally kept as-is but not relied on for tight accuracy."
     },
-
     "future_calibration_and_accuracy_policy": {
       "step_1_planar_fit_model_tuning": {
         "goal": "Keep planar_calib.json in sync with the physical arm.",
@@ -169,7 +169,6 @@
           "Only change calibration via a full planar fit run."
         ]
       },
-
       "step_2_jacobian_refinement_runtime_correction": {
         "goal": "Push from 'good' (~5 mm) to 'tight' (~1–2 mm) on specific targets when needed.",
         "concept": [
@@ -201,7 +200,12 @@
     "planar_calibration_file": {
       "filename": "planar_calib.json",
       "expected_keys": [
-        "L1", "L2", "X0", "Z0", "shoulder_offset", "elbow_offset"
+        "L1",
+        "L2",
+        "X0",
+        "Z0",
+        "shoulder_offset",
+        "elbow_offset"
       ],
       "latest_known_good_fit": {
         "rows_used": 20,
@@ -227,7 +231,6 @@
         "z": "~552 mm"
       }
     },
-
     "goto_xyz_command": {
       "ik_model": "Shoulder-origin planar 2-link + base yaw using planar_calib.json.",
       "safety": {
@@ -295,18 +298,32 @@
       ]
     },
     {
-      "id": "ISSUE_03_COMM_PROTOCOL_AND_TORQUE_LOCK",
-      "title": "Communication / torque control edge cases",
+      "id": "ISSUE_03_COMM_SPAM_AND_TIMEOUTS",
+      "title": "Feedback timeouts and noisy extra messages on the serial line",
       "symptoms": [
-        "Arm sometimes did not move even though IK math and JSON looked correct.",
-        "Occasional 'stuck' behavior after failed commands until a manual move was sent."
+        "Tools waiting for T=1051 feedback would sometimes time out.",
+        "Extra non-JSON lines or older messages appeared in the serial stream."
       ],
-      "root_cause": "Mix of missing newline-terminated JSON, RTS/DTR handshaking quirks, and not explicitly ensuring torque was enabled before motion.",
+      "root_cause": "Firmware was sending additional status output; scripts were not robust to non-JSON or stale lines.",
       "fix": [
-        "Standardized serial open settings: baud=115200, timeout~1s, dsrdtr=None, setRTS(False), setDTR(False).",
-        "Always send newline-terminated JSON objects.",
-        "Added torque_lock(T=210, cmd=1) before high-level motion sequences.",
-        "If the arm appears stuck, send a small valid T=102 joint command to clear any latent driver state."
+        "Always ignore lines that do not start with '{'.",
+        "Always parse JSON safely and filter only messages with T==1051.",
+        "Added small wait after opening serial and after torque lock commands."
+      ]
+    },
+    {
+      "id": "ISSUE_04_OVERFITTING_CALIBRATION",
+      "title": "Trying to chase sub-millimeter accuracy and breaking the model",
+      "symptoms": [
+        "Frequent manual edits of L1/L2/X0/Z0 and offsets.",
+        "New calibration attempts sometimes made overall behavior worse.",
+        "Crazy joint angles for simple targets."
+      ],
+      "root_cause": "Manually tweaking planar_calib.json and mixing different calibration methods.",
+      "fix": [
+        "Locked the policy: planar_calib.json may only be updated by a full planar fit routine.",
+        "Accepted ~5 mm error as good enough for current phase of the project.",
+        "Documented calibration policy in this log and in docs/runtime_planar_model.md."
       ]
     }
   ]
