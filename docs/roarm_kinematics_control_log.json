@@ -1,0 +1,313 @@
+{
+  "doc_type": "RoArm_M3S_Kinematics_and_Control_Log",
+  "version": "1.1",
+  "date_local": "2025-12-08",
+
+  "purpose": [
+    "Persist everything learned so far so another AI or human can pick up without breaking progress.",
+    "Especially: coordinate system origin, joint sign conventions, serial/JSON command details, calibration strategy, and failure modes."
+  ],
+
+  "hardware_and_connection": {
+    "robot": "Waveshare RoArm-M3-S",
+    "connection": {
+      "interface": "USB serial over Type-C",
+      "port_examples": ["/dev/ttyUSB0"],
+      "baud": 115200,
+      "notes": [
+        "Serial must send one JSON object per line, newline-terminated.",
+        "In Python/pyserial we used dsrdtr=None and explicitly set RTS/DTR false to avoid weird resets/handshakes."
+      ]
+    }
+  },
+
+  "firmware_json_protocol": {
+    "rules": [
+      "Send one JSON object per line, terminated with '\\n'.",
+      "Use keys exactly as the firmware expects (wrong keys can trigger unexpected motion/presets)."
+    ],
+    "core_commands_used": {
+      "feedback": {
+        "tx": { "T": 105 },
+        "rx_example_T": 1051,
+        "fields_returned": [
+          "x,y,z (mm)",
+          "b,s,e,t,r,g (radians)  // base, shoulder, elbow, wrist pitch, wrist roll, gripper",
+          "tit (end posture / pitch-ish)",
+          "tB,tS,tE,tT,tR (loads/torques)"
+        ]
+      },
+      "joint_all_radians": {
+        "tx_template": {
+          "T": 102,
+          "base": "rad",
+          "shoulder": "rad",
+          "elbow": "rad",
+          "wrist": "rad",
+          "roll": "rad",
+          "hand": "rad",
+          "spd": 0,
+          "acc": 10
+        },
+        "notes": [
+          "This is the main motion command used from Python.",
+          "Keys MUST be base/shoulder/elbow/wrist/roll/hand. Using j1/j2/j3 etc is invalid for T=102."
+        ]
+      },
+      "single_joint_radians": {
+        "tx_template": { "T": 101, "joint": "1..6", "rad": "rad", "spd": 0, "acc": 10 }
+      },
+      "torque_lock": {
+        "off": { "T": 210, "cmd": 0 },
+        "on": { "T": 210, "cmd": 1 },
+        "note": "After torque lock is turned off, any motion command will automatically re-enable torque lock."
+      },
+      "xyz_goal_blocking": {
+        "tx_template": { "T": 104, "x": "mm", "y": "mm", "z": "mm", "t": "rad", "r": "rad", "g": "rad", "spd": 0.25 },
+        "note": "Blocks until done (safer for single moves)."
+      },
+      "xyz_direct_nonblocking": {
+        "tx_template": { "T": 1041, "x": "mm", "y": "mm", "z": "mm", "t": "rad", "r": "rad", "g": "rad" },
+        "note": "Does not block; moves quickly; dangerous if you send large jumps rapidly."
+      }
+    }
+  },
+
+  "coordinate_system_and_origin": {
+    "firmware_frame_definition_from_docs": {
+      "axes": {
+        "x_positive": "forward (in front of arm)",
+        "y_positive": "to the left (when facing the arm from front)",
+        "z_positive": "up"
+      },
+      "units": { "x": "mm", "y": "mm", "z": "mm" }
+    },
+    "critical_discovery": {
+      "statement": "Firmware (x,y,z) is at or extremely near the shoulder pitch origin for the planar shoulder-elbow motion.",
+      "why_this_matters": [
+        "If you assume base-origin, FK/IK will be systematically wrong.",
+        "Camera-to-arm transforms are simpler if the origin is at the shoulder pitch joint."
+      ]
+    },
+    "experiment_used_to_verify_origin": {
+      "method": "Sweep shoulder joint and record (x,z). If the tip traces a circle centered at the origin, origin is at the shoulder axis.",
+      "example_points": [
+        {
+          "commanded": "shoulder=0.0 (others ~0)",
+          "feedback_xyz": { "x_mm": 51.142, "y_mm": 0.000, "z_mm": 552.419 }
+        },
+        {
+          "commanded": "shoulder=0.4 (others ~0)",
+          "feedback_xyz": { "x_mm": 264.340, "y_mm": 0.000, "z_mm": 487.774 }
+        },
+        {
+          "commanded": "shoulder=0.8 (others ~0)",
+          "feedback_xyz": { "x_mm": 435.449, "y_mm": -0.668, "z_mm": 343.800 }
+        }
+      ],
+      "fitted_circle_result": {
+        "estimated_circle_center_mm": { "x": 0.035, "z": -0.013 },
+        "estimated_radius_mm": 554.791,
+        "interpretation": "Center ≈ (0,0) in XZ → firmware origin is at shoulder pitch."
+      },
+      "human_cross_check": {
+        "observation": "Physical measurements of shoulder-to-tip distance at near-vertical pose matched firmware Z.",
+        "interpretation": "Reinforces shoulder-origin conclusion."
+      }
+    },
+    "rules_to_prevent_future_origin_mistakes": [
+      "Do NOT assume base-origin. Treat firmware (x,y,z) as shoulder-origin.",
+      "If FK/IK looks systematically off, re-run the shoulder sweep circle test to re-confirm origin."
+    ]
+  },
+
+  "joint_conventions": {
+    "non_negotiables": [
+      "Do NOT 'correct' mechanical zero by assumption. If the arm isn’t perfectly aligned at zero, handle it via calibration offsets.",
+      "Use firmware feedback (b,s,e,t,r,g) as the authoritative definition of the current 'zero'."
+    ],
+    "elbow_zero_behavior": {
+      "docs_claim": "Some docs describe elbow initial ~1.570796 rad (90°).",
+      "observed_on_this_arm": [
+        "In tall vertical states ('candle-home-ish'), firmware feedback shows e ≈ 0.0x rad.",
+        "Therefore, for THIS setup, elbow=0 rad in firmware corresponds to the near-vertical initial pose."
+      ],
+      "rule": "Use the firmware-reported elbow as truth. If another arm reports ~1.57 in the same pose, that arm needs its own planar fit."
+    },
+    "gripper_joint": {
+      "range": "g approx 1.08 to 3.14 rad; decreasing opens gripper.",
+      "observed": [
+        "g around 3.12–3.13 rad: fully or nearly closed.",
+        "g around ~1.4–1.5 rad: mostly open and safe.",
+        "Below ~1.1 rad: risk of servo stall."
+      ],
+      "rule": "Keep g unchanged unless explicitly commanded. Avoid g < 1.1."
+    }
+  },
+
+  "calibration_and_accuracy_strategy": {
+    "current_operating_mode": {
+      "ik_accuracy": "Plain planar IK yields ~5 mm positional error on central targets (e.g. x=235,y=0,z=234).",
+      "decision": "This ~5 mm error is ACCEPTABLE for now and is sufficient for vision-based picking with an approach-from-above strategy.",
+      "refine_behavior": "Current 'simple refine' in roarm_simple_move.py uses the same model and does NOT improve error; it is intentionally kept as-is but not relied on for tight accuracy."
+    },
+
+    "future_calibration_and_accuracy_policy": {
+      "step_1_planar_fit_model_tuning": {
+        "goal": "Keep planar_calib.json in sync with the physical arm.",
+        "inputs": [
+          "Safe sampling script (e.g. roarm_collect_samples_safe.py).",
+          "Fitting script (e.g. roarm_fit_planar.py)."
+        ],
+        "process": [
+          "Collect a safe grid of shoulder/elbow commands and record firmware feedback (x,z,s,e) to CSV.",
+          "Run the planar fit to estimate L1, L2, X0, Z0, shoulder_offset, elbow_offset.",
+          "Overwrite planar_calib.json as a whole with the new fitted values."
+        ],
+        "rules": [
+          "Do NOT hand-edit individual values in planar_calib.json.",
+          "Only change calibration via a full planar fit run."
+        ]
+      },
+
+      "step_2_jacobian_refinement_runtime_correction": {
+        "goal": "Push from 'good' (~5 mm) to 'tight' (~1–2 mm) on specific targets when needed.",
+        "concept": [
+          "Use model-based IK as a starting point.",
+          "Probe the real robot locally to measure how (x,z) change with small +/- joint perturbations.",
+          "Build a numeric Jacobian J relating (Δshoulder, Δelbow) to (Δx, Δz) using firmware feedback.",
+          "Solve J * [d_sh; d_el] = [error_x; error_z] for joint corrections.",
+          "Iterate a few times until error is below tolerance."
+        ],
+        "implementation_note": [
+          "Jacobian-style refine should live in a dedicated script (e.g. roarm_jacobian_refine.py), not inside roarm_simple_move.py.",
+          "Any future refine that claims to improve accuracy MUST be Jacobian-based (probing the real arm), not just recalculating IK on slightly nudged XYZ."
+        ]
+      }
+    }
+  },
+
+  "scripts_and_files": {
+    "simple_motion_script": {
+      "filename": "roarm_simple_move.py",
+      "role": "Canonical, SAFE high-level script for real-arm use.",
+      "commands": [
+        "feedback  // T=105 -> T=1051 feedback JSON",
+        "home      // T=102 with joints near 0, hand preserved",
+        "goto_xyz  // IK + optional simple refine using planar_calib.json"
+      ],
+      "golden_rule": "Do NOT modify this file for experiments. Clone it first (e.g. roarm_experimental.py)."
+    },
+    "planar_calibration_file": {
+      "filename": "planar_calib.json",
+      "expected_keys": [
+        "L1", "L2", "X0", "Z0", "shoulder_offset", "elbow_offset"
+      ],
+      "latest_known_good_fit": {
+        "rows_used": 20,
+        "rms_position_error_mm": 0.120,
+        "L1": 238.839,
+        "L2": 316.731,
+        "X0": -0.186,
+        "Z0": -0.371,
+        "shoulder_offset": 0.126072,
+        "elbow_offset": -0.085031
+      }
+    }
+  },
+
+  "simple_motion_behavior_snapshot": {
+    "home_command": {
+      "description": "Move to tall 'candle-ish' pose with joints near zero.",
+      "implementation": "T=102 with base=0, shoulder=0, elbow=0, wrist=0, roll=0, hand=current_g.",
+      "typical_feedback": {
+        "b": "~0.0 rad",
+        "s": "~0.0x rad",
+        "e": "~0.0x rad",
+        "z": "~552 mm"
+      }
+    },
+
+    "goto_xyz_command": {
+      "ik_model": "Shoulder-origin planar 2-link + base yaw using planar_calib.json.",
+      "safety": {
+        "zmin_mm_default": 150.0,
+        "rule": "Refuse or abort any target with z < zmin_mm."
+      },
+      "canonical_test_target": {
+        "target_xyz_mm": { "x": 235.0, "y": 0.0, "z": 234.0 },
+        "test_sequence": [
+          "1) python3 roarm_simple_move.py home",
+          "2) python3 roarm_simple_move.py goto_xyz 235 0 234"
+        ],
+        "expected_behavior": {
+          "example_ik_solution_rad": {
+            "base": 0.0,
+            "shoulder": -0.473822,
+            "elbow": 1.972540
+          },
+          "example_firmware_feedback": {
+            "x": 237.12,
+            "y": 0.0,
+            "z": 229.23
+          },
+          "error_mm": {
+            "ex": -2.123,
+            "ez": 4.768,
+            "norm": 5.219,
+            "tolerance": "<= 7.0 mm accepted as PASS."
+          }
+        },
+        "refine_mode_note": {
+          "command_example": "python3 roarm_simple_move.py goto_xyz 235 0 234 --refine --iters 2 --gain 0.35 --settle 6.0",
+          "current_behavior": "Refine logs 2 iterations but final error remains ~5.2 mm. This is ACCEPTED for now.",
+          "future_rule": "If a Jacobian refine is reintroduced, it must at least not worsen plain-IK error on this canonical target."
+        }
+      }
+    }
+  },
+
+  "history_of_issues_and_fixes": [
+    {
+      "id": "ISSUE_01_WRONG_ORIGIN",
+      "title": "Assuming base-origin instead of shoulder-origin",
+      "symptoms": [
+        "FK/IK never matched firmware feedback despite tuning link lengths.",
+        "Large systematic errors, especially in Z."
+      ],
+      "root_cause": "Assumed (0,0,0) at base instead of at shoulder pitch joint.",
+      "fix": [
+        "Ran the 'shoulder circle test' and confirmed circle center at (0,0) in XZ.",
+        "Rebuilt kinematics with origin at shoulder and refit planar model."
+      ]
+    },
+    {
+      "id": "ISSUE_02_BAD_JSON_KEYS_OR_T_CODES",
+      "title": "Using wrong JSON keys or wrong T command for motion",
+      "symptoms": [
+        "Arm unexpectedly went to preset poses (e.g., candle) instead of requested pose.",
+        "Some motion commands were ignored."
+      ],
+      "root_cause": "Using fields like j1/j2/j3 or wrong T values instead of T=102 with base/shoulder/elbow/wrist/roll/hand.",
+      "fix": [
+        "Standardized on T=102 with correct field names for joint moves.",
+        "Created a small send_joints() helper to always format motion JSON correctly."
+      ]
+    },
+    {
+      "id": "ISSUE_03_COMM_PROTOCOL_AND_TORQUE_LOCK",
+      "title": "Communication / torque control edge cases",
+      "symptoms": [
+        "Arm sometimes did not move even though IK math and JSON looked correct.",
+        "Occasional 'stuck' behavior after failed commands until a manual move was sent."
+      ],
+      "root_cause": "Mix of missing newline-terminated JSON, RTS/DTR handshaking quirks, and not explicitly ensuring torque was enabled before motion.",
+      "fix": [
+        "Standardized serial open settings: baud=115200, timeout~1s, dsrdtr=None, setRTS(False), setDTR(False).",
+        "Always send newline-terminated JSON objects.",
+        "Added torque_lock(T=210, cmd=1) before high-level motion sequences.",
+        "If the arm appears stuck, send a small valid T=102 joint command to clear any latent driver state."
+      ]
+    }
+  ]
+}
