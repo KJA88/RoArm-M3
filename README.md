@@ -1,197 +1,181 @@
-RoArm-M3-S / M3-Pro Python Control Project
+START OF README.md
+RoArm-M3-S / M3-Pro — Python Control & Kinematic Calibration
 
-This repository contains my work building a complete Python-based control stack for the Waveshare RoArm-M3-S / RoArm-M3-Pro robotic arm.
-It includes serial communication, JSON-command control, motion control tools, inverse kinematics experiments, and mission-file automation.
+This repository contains my complete Python-based control stack for the Waveshare RoArm-M3-S / RoArm-M3-Pro robotic arm. The goal is accurate, safe, and fully documented multi-axis control over UART/JSON, including kinematics, calibration, and high-level motion.
 
-The goal of this project is to develop full 6-axis programmatic control of the robotic arm using standard Python and UART, without relying on the browser interface.
+This project is built to demonstrate:
 
-✨ Features
-✓ Python UART Control
+Real robotics engineering workflows
 
-Uses pyserial to communicate with the arm over USB-UART.
-Implements the protocol described in Waveshare’s documentation and supports both sending commands and reading async feedback from the arm.
-Based on the official demo serial_simple_ctrl.py.
+Clear kinematic modeling with documentation
 
+A reproducible calibration pipeline
 
-✓ JSON Command Interface
+Clean, portfolio-quality engineering style
 
-All arm movement is performed through Waveshare’s JSON instructions, including:
+Code that another engineer or AI assistant can safely continue
 
-T=101 – single-joint radian control
+Features
+Python UART Control Layer
 
-T=102 – full 6-joint radian control
+Safe and consistent Python communication with:
 
-T=103 / T=104 / T=1041 – inverse kinematics (XYZT) control
+pyserial over /dev/ttyUSB0
 
-T=105 – live feedback of all joint positions, loads, and end-effector coordinates
+Auto-formatted JSON commands
 
-T=210 – torque lock on/off
+Safe joint-limit enforcement
 
-T=114 – LED control
+Supported official commands:
 
-Full JSON command descriptions come from the Waveshare tutorial.
+T=101 : single-joint radian move
 
+T=102 : full 6-joint radian move
 
+T=104 : XYZ blocking inverse kinematics move
 
-✓ Mission File Recording & Playback
+T=105 : feedback returns joints, torques, XYZ
 
-Implements tools for:
+T=210 : torque lock on/off
 
-Creating mission files
+T=114 : LED control
 
-Appending JSON movement steps
+The canonical safe control script is:
+roarm_simple_move.py
 
-Inserting, replacing, or deleting steps
+Commands provided:
 
-Recording the robot’s current pose directly into mission steps
+home
 
-Looping mission playback
+feedback
 
-Based on Waveshare’s mission-editing JSON interface.
+goto_xyz X Y Z [--refine]
 
+Kinematics and Calibration Model
 
-✓ Inverse Kinematics Work (Custom)
+This project implements:
 
-Includes experiments using SciPy’s least_squares optimizer to solve for:
+Forward kinematics (FK) for a shoulder-origin robot
 
-Base, shoulder, elbow, and wrist pitch joint angles
+Inverse kinematics (IK) for shoulder + elbow + base
 
-Forward kinematics model (FK)
+A full planar calibration model for:
 
-Safe joint limits
+Link 1 length
 
-Pose solving for X/Y/Z targets
+Link 2 length
 
-These scripts form the foundation for higher-level autonomous motion.
+X/Z offsets
 
-✓ Safety Tools
+Shoulder and elbow radian offsets
 
-Utility code for:
+All math is thoroughly documented in the docs/ directory:
 
-Torque-off operations
+fk_hand_calc_planar.md
 
-Joint-limit enforcement
+ik_hand_calc_planar.md
 
-Safe claw calibration (avoiding servo stall)
+fk_2link_planar_handcalc.md
 
-Smooth motion profiles through speed (spd) and acceleration (acc) fields
+ik_2link_planar_handcalc.md
 
-📁 Repository Structure
-/python/
-    serial_ctrl/       # UART communication scripts
-    ik/                # Inverse kinematics solvers and FK models
-    utils/             # Safety, presets, calibration, logging
-missions/
-    *.mission          # Example mission files created on the robot
-docs/
-    README.md          # This document
+runtime_planar_model.md
 
-🔧 Requirements
+roarm_kinematics_control_log.json
 
-Python 3.10+
+history_issues_and_fixes.md
 
-pyserial
+command_cheatsheet.md
 
-numpy
+The major discovery (and root of 90% of early confusion):
+Firmware XYZ origin is at the SHOULDER joint, not the base.
 
-scipy (for IK)
+This repo contains all experiments, tests, and logic that proved this and rebuilt the model correctly.
 
-Optional: requests (for Wi-Fi HTTP control mode)
+Calibration Tools
 
-Install:
+Two-stage calibration appears in this repository:
 
-pip install -r requirements.txt
+Planar model fitting
+Scripts:
 
-🚀 Quick Start
-1. Connect the Robotic Arm
+roarm_collect_samples_safe.py
 
-Plug Type-C into PC (Windows, Linux, Raspberry Pi, Jetson, etc.).
+roarm_fit_planar.py
 
-2. Launch the UART controller
-python serial_simple_ctrl.py COM3      # Windows
-python serial_simple_ctrl.py /dev/ttyUSB0   # Linux
+Output is written to:
+planar_calib.json
 
-3. Send a command
+These values must not be manually edited.
+They are updated only through the fitter.
 
-Move the arm to an initial pose:
+(Future) Jacobian refinement
+Currently disabled because plain IK already provides around 5 mm accuracy, enough for camera-guided picking.
 
-{"T":100}
+Canonical High-Level Usage
 
+Home the robot:
+python3 roarm_simple_move.py home
 
-Move joints individually:
+Move to XYZ:
+python3 roarm_simple_move.py goto_xyz 235 0 234
 
-{"T":101,"joint":2,"rad":0.5,"spd":0,"acc":10}
+Get live feedback:
+python3 roarm_simple_move.py feedback
 
+Torque off:
+python3 torque_off.py
 
-Move using full 6-joint radian control:
+LED on:
+python3 serial_simple_ctrl.py /dev/ttyUSB0 '{"T":114,"led":255}'
 
-{"T":102,"base":0,"shoulder":0.6,"elbow":1.2,"wrist":0,"roll":0,"hand":2.5,"spd":0,"acc":10}
+Repository Structure
 
+roarm_simple_move.py - Main safe interface
+roarm_collect_samples_safe.py - Collects calibration samples
+roarm_fit_planar.py - Fits planar calibration model
+planar_calib.json - Latest calibrated values
+roarm_kinematics_control_log.json - Ground-truth engineering log
+docs/ - All FK/IK math and history
+archive/ - Old unused experiments
+README.md - This file
 
-Move using inverse kinematics:
+Safety Rules
 
-{"T":104,"x":235,"y":0,"z":220,"t":0,"r":0,"g":3.14,"spd":0.25}
+Never command Z below 150 mm unless testing very carefully.
 
+Gripper angle g below 1.1 rad risks servo stall.
 
-Turn torque off (free-move):
+Always run home before experiments.
 
-{"T":210,"cmd":0}
+Keep the USB cable slack so the arm doesn’t yank the port.
 
-🎥 Mission File Example
+Engineering Log
 
-Create a mission:
+All reasoning, modeling, calibration, failures, and fixes are permanently stored here:
 
-{"T":220,"name":"pick_and_place","intro":"Demo mission"}
+docs/history_issues_and_fixes.md
+docs/roarm_kinematics_control_log.json
 
+These documents prevent knowledge regression and ensure future changes do not break confirmed truths.
 
-Append movement:
+Project Intent
 
-{"T":222,"name":"pick_and_place","step":"{\"T\":104,\"x\":200,\"y\":0,\"z\":150,\"t\":0,\"r\":0,\"g\":3.14,\"spd\":0.25}"}
+This repository demonstrates:
 
+Real robotic arm control over UART
 
-Playback:
+Clear FK/IK modeling with human-readable math
 
-{"T":242,"name":"pick_and_place","times":3}
+A structured calibration system
 
+A professional-level robotics software structure
 
-(Documentation source: Step Recording and Reproduction)
+A foundation for AI-based pick-and-place control
 
+License
 
-📚 Documentation Sources
+MIT License (or your preferred choice)
 
-This project implements control systems based on the official Waveshare documentation:
-
-Robotic Arm Motion Control (JSON command meaning)
-
-
-Step Recording & Reproduction
-
-
-Python UART Communication Demo
-
-
-JSON Command Meaning Overview
-
-
-🛠 Status
-
-Active development.
-Upcoming features:
-
-Full 6-DOF IK including wrist roll & gripper orientation
-
-Smoother Cartesian path planning
-
-Visualizer integration
-
-Web-API wrapper around JSON commands
-
-Object-oriented Python SDK
-
-🤝 Contributions
-
-Pull requests are welcome—especially improvements to IK accuracy, safety constraints, and higher-level motion planning.
-
-📜 License
-
-MIT License (or specify your preferred license).
+===========================================================
+END OF README.md
