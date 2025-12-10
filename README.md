@@ -1,220 +1,185 @@
-# RoArm-M3-S / M3-Pro – Python Control & Kinematics
+RoArm-M3-S / M3-Pro – Python Control & Kinematics
 
-This repo is my Python control stack and kinematics lab for the Waveshare RoArm-M3-S / RoArm-M3-Pro robotic arm.
+This repo is my Python control stack and kinematics laboratory for the Waveshare RoArm-M3-S / RoArm-M3-Pro robotic arm.
 
 The goals:
 
-- Control the arm over USB serial + JSON from Python (no browser UI needed).
-- Have a clear, documented kinematic model matched to this physical arm.
-- Keep a permanent engineering log so future work (or another AI) doesn’t redo the same debugging.
+Control the arm using Python over USB serial + JSON (no browser UI required)
 
----
+Maintain a clean, correct, documented kinematic model
 
-## 🔧 What this repo actually does
+Keep an engineering log so future work (or another AI) can build on this safely
 
-### 1. Simple, safe runtime control
+Provide a portfolio-quality robotics project
+
+🔧 What This Repo Actually Does
+1. Simple, Safe Runtime Control
 
 Main daily-use script:
 
-**`roarm_simple_move.py`**
+roarm_simple_move.py
 
 It supports:
 
-- `home` – go to tall “candle” pose  
-- `feedback` – print firmware XYZ + joints  
-- `goto_xyz` – move to a target XYZ using calibrated planar IK  
+home → go to tall “candle” pose
+
+feedback → print firmware XYZ + joints
+
+goto_xyz → move to XYZ using calibrated planar IK
 
 Example:
 
-```bash
 python3 roarm_simple_move.py home
 python3 roarm_simple_move.py goto_xyz 235 0 234
 python3 roarm_simple_move.py feedback
-```
 
-It uses only:
+Commands used internally:
 
-- T=105 → feedback  
-- T=102 → full joint radian control  
+T=105 → firmware feedback
 
-The kinematics model is a **shoulder-origin 2-link planar chain + base yaw**, calibrated in `planar_calib.json`.
+T=102 → full joint radian control
 
----
+Kinematic model: a shoulder-origin 2-link planar chain + base yaw using calibrated parameters from planar_calib.json.
 
-## 🔧 Calibration & Kinematics Tools
+🔧 Calibration & Kinematics Tools
 
-Included tools:
+roarm_collect_samples_safe.py
+• Collects (shoulder, elbow) → (x, z) samples safely from the real arm.
 
-- **`roarm_collect_samples_safe.py`**  
-  Collect (shoulder, elbow) → (x, z) samples from firmware safely.
+roarm_fit_planar.py
+• Fits the planar model parameters:
+L1, L2, X0, Z0, shoulder_offset, elbow_offset
+and writes them into planar_calib.json.
 
-- **`roarm_fit_planar.py`**  
-  Fit L1, L2, X0, Z0, shoulder_offset, elbow_offset and write `planar_calib.json`.
+DO NOT edit planar_calib.json by hand.
 
-Related reference files:
+Historical files:
+• roarm_arm_characterization_CALIBRATED.json
+(Old DH-based calibration before adopting planar calibration)
 
-- **`roarm_arm_characterization_CALIBRATED.json`**  
-  Historical DH snapshot before planar calibration approach.
+🚀 Quick Start
+Virtual environment (optional)
 
----
-
-## 🚀 Quick Start
-
-### Virtual environment (optional)
-
-```bash
 source ~/.venv/bin/activate
-# quit venv:
 deactivate
-```
 
-### Connect the arm
+Connect the arm
 
-USB-C → Raspberry Pi (or PC)
+USB-C to Raspberry Pi or PC
 
-Serial device is usually:
-
-```
+Typical device:
 /dev/ttyUSB0
-```
 
-Or stable persistent device:
-
-```
+Stable persistent ID:
 /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_...
-```
 
-### Home the arm
+Home the arm
 
-```bash
 python3 roarm_simple_move.py home
-```
 
-### Move to canonical test target
+Canonical test target
 
-```bash
 python3 roarm_simple_move.py goto_xyz 235 0 234
-```
 
-Expected behavior:
+Expected:
 
-- IK solution:  
-  base ≈ 0.0  
-  shoulder ≈ -0.474  
-  elbow ≈ 1.973  
-- Firmware feedback:  
-  x ≈ 237 mm  
-  z ≈ 229–230 mm  
-- Error:  
-  4–5 mm → **PASS**
+IK:
+base ≈ 0
+shoulder ≈ -0.474
+elbow ≈ 1.973
 
----
+Firmware:
+x ≈ 237
+z ≈ 229–230
 
-## 📐 FK & IK Math (Hand Calculations)
+Error ≈ 5 mm → PASS
 
-All math documents are located inside **docs/**:
+📐 FK & IK Math (Hand Calculations)
 
-- `fk_hand_calc_planar.md`
-- `fk_2link_planar_handcalc.md`
-- `ik_hand_calc_planar.md`
-- `ik_2link_planar_handcalc.md`
+Full documentation located in docs/:
 
-### The FK model used at runtime:
+fk_hand_calc_planar.md
+fk_2link_planar_handcalc.md
+ik_hand_calc_planar.md
+ik_2link_planar_handcalc.md
 
-```
-φ   = s + shoulder_offset
-e_eff = e + elbow_offset
-φ₂  = φ + e_eff
+FK used at runtime:
 
-x_p = L1*sin(φ) + L2*sin(φ₂) + X0
-z_p = L1*cos(φ) + L2*cos(φ₂) + Z0
+φ = shoulder + shoulder_offset
+e_eff = elbow + elbow_offset
+φ₂ = φ + e_eff
+
+x_p = L1sin(φ) + L2sin(φ₂) + X0
+z_p = L1cos(φ) + L2cos(φ₂) + Z0
 
 x = cos(base)*x_p
 y = sin(base)*x_p
 z = z_p
-```
 
-### The IK solver:
+IK used at runtime:
 
-```
 base = atan2(y, x)
 
 x_p = hypot(x, y)
 x_s = x_p - X0
-z_s = z  - Z0
+z_s = z - Z0
 
-Use law-of-cosines to solve e_eff
+Use law-of-cosines → solve e_eff
 Solve φ from triangle geometry
 
-shoulder = φ   - shoulder_offset
-elbow    = e_eff - elbow_offset
-```
+shoulder = φ - shoulder_offset
+elbow = e_eff - elbow_offset
 
-These exactly match the runtime code.
+📊 Planar Model & Calibration Rules
 
----
+Documented in docs/runtime_planar_model.md
 
-## 📊 Planar Model & Calibration Rules
+Key rules:
 
-Documented in:
+• Firmware XYZ origin is at the shoulder pitch axis, NOT the base
+• Planar parameters =
+L1, L2, X0, Z0, shoulder_offset, elbow_offset
+• planar_calib.json is ONLY rewritten by roarm_fit_planar.py
+• Do NOT hand-edit calibration parameters
 
-**`docs/runtime_planar_model.md`**
+🧾 Command Cheatsheet
 
-Key facts:
-
-- Firmware (x,y,z) origin is **at the shoulder pitch joint**.  
-- Planar model uses six parameters:  
-  **L1, L2, X0, Z0, shoulder_offset, elbow_offset**  
-- `planar_calib.json` should **ONLY** be rewritten by `roarm_fit_planar.py`.  
-- Never hand-edit calibration parameters.
-
----
-
-## �� Command Cheatsheet
-
-See: **`docs/command_cheatsheet.md`**
+See docs/command_cheatsheet.md
 
 Includes:
 
-- VENV activation  
-- Home / Goto XYZ commands  
-- Torque on/off  
-- LED on/off JSON  
-- Bash aliases  
-- USB serial device ID reminder  
-- Direct JSON examples
+• Home / goto_xyz commands
+• Torque off/on
+• LED on/off JSON
+• Bash aliases
+• USB device reminders
+• Direct JSON examples
+• Venv activation commands
 
----
+🧠 Engineering Log
 
-## 🧠 Engineering Log
+Two files store the long-term technical memory:
 
-Two locations:
+docs/history_issues_and_fixes.md
+– Wrong origin assumptions
+– JSON protocol mistakes
+– Calibration errors
+– Fix explanations
 
-### 1. `docs/history_issues_and_fixes.md`
-Tracks all major issues, including:
+docs/roarm_kinematics_control_log.json
+– Coordinate frame rules
+– Joint sign conventions
+– Calibration values
+– Canonical test target
+– Rules to avoid regressions
 
-- Wrong origin assumption  
-- Wrong JSON keys or wrong T codes  
-- Calibration failures  
-- Fix explanations  
+This ensures future work never repeats old mistakes.
 
-### 2. `docs/roarm_kinematics_control_log.json`
-Structured memory file containing:
+📂 Repository Layout (Cleaned)
 
-- Coordinate frame rules  
-- Joint sign conventions  
-- Calibration parameters  
-- Canonical test target definition  
-- Rules for future maintainers  
-
-This ensures the entire story of the project is preserved.
-
----
-
-## 📂 Repository Layout (cleaned)
-
-```
 README.md
+LICENSE
+requirements.txt
 planar_calib.json
 calibrated_dh.json
 roarm_arm_characterization_CALIBRATED.json
@@ -226,37 +191,29 @@ torque_off.py
 torque_on.py
 docs/
 archive/
-```
 
-Everything in `archive/` is preserved code that is not used in production.
+archive/ contains old or unused scripts safely stored.
 
----
+⚠️ Safety Notes
 
-## ⚠️ Safety Notes
+• Avoid z < 150 mm unless testing slowly
+• Gripper below g = 1.1 rad risks servo stall
+• Always home before new IK targets
+• Keep cable slack (avoid disconnects)
+• Watch shoulder/elbow limits
 
-- Avoid **z < 150 mm** except controlled testing  
-- Avoid gripper **g < 1.1 rad** (servo stall risk)  
-- Always home before sending new commands  
-- Keep the USB cable slack  
-- Monitor shoulder & elbow when approaching limits  
+🎯 Purpose of This Repo
 
----
+This project demonstrates:
 
-## 🎯 Purpose of This Repo
+• Real robot control via Python → UART → JSON
+• A validated and documented kinematic model
+• A reproducible calibration pipeline
+• A professional structure suitable for jobs/portfolio
+• A complete engineering history so progress is never lost
 
-This repo demonstrates:
+Engineers (or AI) can read this repo and continue development safely.
 
-- Real robotic arm control over UART/JSON  
-- A documented and validated kinematic model  
-- A repeatable calibration pipeline  
-- A professional structure suitable for jobs/portfolio  
-- Clear logs so future work doesn’t break working code  
-
-Another engineer (or another AI) can now read this repo and continue development safely.
-
----
-
-## 📄 License
-
-Recommended: MIT License (add LICENSE file later).
-
+📄 License
+MIT License (see LICENSE)
+✅ END OF FILE
