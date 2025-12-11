@@ -49,16 +49,17 @@ def main():
 
     # 3) Circle parameters (same as your log)
     cx, cy, cz = 235.0, 0.0, 234.0   # center
-    R = 50.0                          # radius
-    steps = 180                       # more steps = smoother circle
+    R = 60.0                          # radius
+    steps = 240                       # more steps = smoother circle
     dt = 0.03                         # ~33 Hz
+    AMP = 25.0                        # vertical swing (mm)
 
     # 4) Stream 1041 direct control points
     for i in range(steps):
         theta = 2 * math.pi * (i / steps)
         x = cx + R * math.cos(theta)
         y = cy + R * math.sin(theta)
-        z = cz                        # keep Z constant for now
+        z = cz + AMP * math.sin(theta)
 
         cmd = {
             "T": 1041,
