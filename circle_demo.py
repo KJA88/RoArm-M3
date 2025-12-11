@@ -1,3 +1,31 @@
+# Quick tuning knobs (make it look pro)
+# 
+# In the working script, tweak these:
+#   steps = 180    # more steps → smoother
+#   dt = 0.03      # smaller dt → faster (higher frequency)
+#   R = 50.0       # circle radius
+#
+# Examples:
+#   Smoother: steps = 360
+#   Faster:   dt = 0.02 or 0.015
+#   Bigger circle (if workspace allows): R = 70.0
+#
+# 3D helix (Z moving):
+#   AMP = 20.0  # mm of vertical swing
+#   for i in range(steps):
+#       theta = 2 * math.pi * (i / steps)
+#       x = cx + R * math.cos(theta)
+#       y = cy + R * math.sin(theta)
+#       z = cz + AMP * math.sin(theta)
+#
+# Why this is a big deal (hireable story):
+#   - Streaming Cartesian controller using T=1041 (native IK)
+#   - Real-time path generation using cos/sin
+#   - Clean separation: path → command → firmware → motion
+#   - Great README bullet for interviews
+
+
+
 #!/usr/bin/env python3
 import serial, json, time, math
 
