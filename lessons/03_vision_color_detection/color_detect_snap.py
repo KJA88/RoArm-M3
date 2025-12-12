@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""
+Capture one frame and try to find a colored blob (e.g. a red object).
+
+What it does:
+  - Captures a single frame from the IMX708
+  - Converts to HSV
+  - Thresholds for a red-ish color
+  - Finds the largest contour
+  - Computes its centroid (cx, cy) in pixel coordinates
+  - Computes offset from image center (dx, dy)
+  - Draws a circle and crosshair on the blob
+  - Saves result as color_detect_out.jpg
+"""
+
+from picamera2 import Picamera2
+import cv2
+import numpy as np
+import time
+
+
+def main():
+    picam2 = Picamera2()
+
+    # Use a still configuration for good quality
+    config = picam2.create_still_configuration()
+    picam2.configure(config)
+
+    print("Starting camera...")
+    picam2.start()
+    time.sleep(2.0)  # let exposure settle
+
+    print("Capturing frame...")
+    frame = picam2.capture_array()  # BGR image, shape (H, W, 3)
+    print("Frame shape:", frame.shape)
+
+    # Optionally resize down so operations are cheaper
+    scale = 0.5
+    frame_small = cv2.resize(
+        frame,
+        (int(frame.shape[1] * scale), int(frame.shape[0] * scale)),
+        interpolation=cv2.INTER_AREA,
+    )
+
+    # Convert to HSV for color thresholding
+    hsv = cv2.cvtColor(frame_small, cv2.COLOR_BGR2HSV)
+
+    # --- Color threshold for RED-ish object ---
+    # Red wraps around hue=0, so we use two ranges.
+    lower_red1 = np.array([0, 80, 80], dtype=np.uint8)
+    upper_red1 = np.array([10, 255, 255], dtype=np.uint8)
+
+    lower_red2 = np.array([170, 80, 80], dtype=np.uint8)
+    upper_red2 = np.array([180, 255, 255], dtype=np.uint8)
+
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    mask = cv2.bitwise_or(mask1, mask2)
+
+    # Clean up mask (remove small noise)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    # Find contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        print("No red object found. Try putting a bright red thing in view.")
+        out_name = "color_detect_out.jpg"
+        cv2.imwrite(out_name, frame_small)
+        print(f"Saved raw frame to {out_name}")
+        picam2.close()
+        return
+
+    # Largest contour = our object
+    largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
+    print("Largest contour area:", area)
+
+    # Centroid
+    M = cv2.moments(largest)
+    if M["m00"] == 0:
+        print("Contour had zero area in moments, skipping.")
+        out_name = "color_detect_out.jpg"
+        cv2.imwrite(out_name, frame_small)
+        print(f"Saved frame without markups to {out_name}")
+        picam2.close()
+        return
+
+    cx = int(M["m10"] / M["m00"])
+    cy = int(M["m01"] / M["m00"])
+
+    # Image center (in resized image)
+    h, w = frame_small.shape[:2]
+    center_x = w // 2
+    center_y = h // 2
+
+    dx = cx - center_x
+    dy = cy - center_y
+
+    print(f"Detected red object at (cx, cy) = ({cx}, {cy}) in resized image.")
+    print(f"Image center = ({center_x}, {center_y})")
+    print(f"Offset from center: dx = {dx}, dy = {dy} (pixels)")
+
+    # Map back to approximate full-res coordinates (optional for now)
+    full_cx = int(cx / scale)
+    full_cy = int(cy / scale)
+    print(f"Approx. full-res coordinates: ({full_cx}, {full_cy})")
+
+    # Draw marker
+    cv2.circle(frame_small, (cx, cy), 10, (0, 255, 0), 2)
+    cv2.drawMarker(
+        frame_small,
+        (cx, cy),
+        (0, 255, 0),
+        markerType=cv2.MARKER_CROSS,
+        markerSize=20,
+        thickness=2,
+    )
+
+    out_name = "color_detect_out.jpg"
+    cv2.imwrite(out_name, frame_small)
+    print(f"Saved debug image with marker to {out_name}")
+
+    picam2.close()
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()
