@@ -1,41 +1,41 @@
 #!/usr/bin/env python3
 """
-Simple one-shot camera test using Picamera2 + OpenCV.
+camera_snap.py
 
-What it does:
-  - Opens the IMX708 camera
-  - Waits 2 seconds for auto-exposure to settle
-  - Captures one frame into a NumPy array
-  - Prints the shape (H, W, C)
-  - Saves it as frame.jpg in the current folder
+- Capture a single frame from Picamera2
+- Save as frame.jpg in the current directory
+- Uses the SAME color pipeline as camera_color_localize_picam2.py
 """
 
-from picamera2 import Picamera2
-import cv2
 import time
+import cv2
+from picamera2 import Picamera2
 
+OUTPUT = "frame.jpg"
 
 def main():
     picam2 = Picamera2()
 
-    # Use a still configuration (good quality single frame)
-    config = picam2.create_still_configuration()
+    config = picam2.create_still_configuration(
+        main={"format": "RGB888", "size": (1280, 720)}
+    )
     picam2.configure(config)
 
-    print("Starting camera...")
+    # Let auto white balance and exposure settle
+    picam2.set_controls({"AwbEnable": True})
     picam2.start()
-    time.sleep(2.0)  # let auto exposure / focus settle a bit
+    time.sleep(1.0)
 
-    print("Capturing frame...")
-    frame = picam2.capture_array()  # this is a NumPy array (H, W, 3)
-
-    print("Frame shape:", frame.shape)
-    print("Saving to frame.jpg ...")
-    cv2.imwrite("frame.jpg", frame)
-
+    # IMPORTANT:
+    # With format="RGB888", capture_array() returns a BGR-style array
+    # suitable for OpenCV. Do NOT swap channels again.
+    frame = picam2.capture_array()
     picam2.close()
-    print("Done.")
 
+    h, w = frame.shape[:2]
+    print(f"Captured frame: {w}x{h}")
+    cv2.imwrite(OUTPUT, frame)
+    print("Saved", OUTPUT)
 
 if __name__ == "__main__":
     main()

@@ -2,61 +2,70 @@
 """
 camera_color_localize_picam2.py
 
-- Uses Picamera2 (libcamera) to grab ONE frame
-- Uses the HSV thresholds we derived from inspect_center_hsv.py
-- Finds the largest blob of that color
-- Prints centroid pixel (u, v)
-- Saves:
-    - raw frame
-    - mask
-    - annotated image
+- Capture one frame from Picamera2
+- Load HSV range from hsv_config.json (written by inspect_center_hsv.py)
+- Detect largest blob of that color
+- Print centroid pixel (u, v)
+- Save:
+  - cam_live_frame.jpg
+  - cam_live_mask.jpg
+  - cam_live_annotated.jpg
 """
 
 import time
+import json
+import os
+
 import cv2
 import numpy as np
-
 from picamera2 import Picamera2
 
 IMAGE_RAW  = "cam_live_frame.jpg"
 IMAGE_MASK = "cam_live_mask.jpg"
 IMAGE_ANN  = "cam_live_annotated.jpg"
+HSV_CONFIG = "hsv_config.json"
 
-# HSV range based on your measured object color:
-# H: 121–127 -> margin -> 110–140
-# S: 171–229 -> S >= 150
-# V: 148–185 -> V >= 120
-LOWER_HSV = np.array([110, 150, 120], dtype=np.uint8)
-UPPER_HSV = np.array([140, 255, 255], dtype=np.uint8)
+
+def load_hsv_range():
+    if not os.path.exists(HSV_CONFIG):
+        raise FileNotFoundError(
+            f"{HSV_CONFIG} not found. Run camera_snap.py + "
+            f"inspect_center_hsv.py first to generate it."
+        )
+
+    with open(HSV_CONFIG, "r") as f:
+        cfg = json.load(f)
+
+    lower = np.array(cfg["lower"], dtype=np.uint8)
+    upper = np.array(cfg["upper"], dtype=np.uint8)
+    print("Loaded HSV range from", HSV_CONFIG)
+    print("  LOWER_HSV:", lower.tolist())
+    print("  UPPER_HSV:", upper.tolist())
+    return lower, upper
 
 
 def main():
-    picam2 = Picamera2()
+    lower_hsv, upper_hsv = load_hsv_range()
 
-    # 1280x720 is plenty and not too heavy
+    picam2 = Picamera2()
     config = picam2.create_still_configuration(
         main={"format": "RGB888", "size": (1280, 720)}
     )
     picam2.configure(config)
+    picam2.set_controls({"AwbEnable": True})
     picam2.start()
-
-    # let auto-exposure / white balance settle a bit
     time.sleep(1.0)
 
-    # capture_array returns RGB
-    frame_rgb = picam2.capture_array()
+    # With format="RGB888", capture_array() returns a BGR-style array for OpenCV
+    frame = picam2.capture_array()
     picam2.close()
-
-    # Convert to BGR for OpenCV
-    frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
     print("Captured frame shape:", frame.shape)
     cv2.imwrite(IMAGE_RAW, frame)
     print("Saved raw frame to", IMAGE_RAW)
 
-    # 1) HSV + mask
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, LOWER_HSV, UPPER_HSV)
+    mask = cv2.inRange(hsv, lower_hsv, upper_hsv)
 
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.erode(mask, kernel, iterations=1)
@@ -65,8 +74,9 @@ def main():
     cv2.imwrite(IMAGE_MASK, mask)
     print("Saved mask to", IMAGE_MASK)
 
-    # 2) Contours
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
     if not contours:
         print("No contours found — object might be out of view or HSV off.")
@@ -75,7 +85,6 @@ def main():
     largest = max(contours, key=cv2.contourArea)
     area = cv2.contourArea(largest)
     print(f"Largest contour area: {area:.1f} pixels")
-
     if area < 100:
         print("Largest contour too small (likely noise).")
         return
@@ -89,14 +98,19 @@ def main():
     cy = int(M["m01"] / M["m00"])
     print(f"Centroid pixel (u, v) = ({cx}, {cy})")
 
-    # 3) Annotate
     annotated = frame.copy()
     cv2.circle(annotated, (cx, cy), 8, (0, 0, 255), -1)        # red dot
     cv2.drawContours(annotated, [largest], -1, (0, 255, 0), 2) # green outline
 
     h, w = annotated.shape[:2]
-    cv2.drawMarker(annotated, (w // 2, h // 2), (255, 0, 0),
-                   markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+    cv2.drawMarker(
+        annotated,
+        (w // 2, h // 2),
+        (255, 0, 0),   # blue crosshair
+        markerType=cv2.MARKER_CROSS,
+        markerSize=20,
+        thickness=2,
+    )
 
     cv2.imwrite(IMAGE_ANN, annotated)
     print("Saved annotated frame to", IMAGE_ANN)
