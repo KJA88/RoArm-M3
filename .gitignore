@@ -7,3 +7,4 @@ samples_safe.csv
 samples*.csv
 *.bak
 archive/*
+hsv_config.json
