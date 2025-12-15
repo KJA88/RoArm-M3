@@ -1,242 +1,242 @@
-Lesson 04 – Camera ↔ Robot Sample Logging (u,v → x,y,z)
-Purpose of this lesson
+# Lesson 04 – Camera ↔ Robot Sample Logging (u,v → x,y,z)
 
-This lesson builds the data collection bridge between:
+## Purpose of this lesson
 
-Vision (camera pixel space) → (u, v)
+This lesson builds the **data collection bridge** between:
 
-Robot Cartesian space → (x, y, z)
+- **Vision (camera pixel space):** (u, v)
+- **Robot Cartesian space:** (x, y, z)
 
-The goal is not calibration yet.
+The goal is **NOT calibration yet**.
 
-The goal is to reliably collect paired samples:
+The goal is to reliably collect **paired samples**:
 
-(u, v)  ← camera sees object
-(x, y, z) ← robot reports end-effector position
+- (u, v) ← camera sees the object  
+- (x, y, z) ← robot reports end-effector position  
 
+These samples will be used in **Lesson 05** to learn a camera → robot mapping.
 
-These samples will be used in Lesson 05 to learn a camera→robot mapping.
+---
 
-What this lesson actually does
+## What this lesson actually does
 
 On demand (ENTER key):
 
-Capture a frame from the IMX708 camera
-
-Detect a colored object using HSV (from Lesson 03)
-
-If the object is detected:
-
-Compute its pixel centroid (u, v)
-
-Query the robot firmware for current (x, y, z)
-
-Append one row to a CSV file
-
-If the object is not visible:
-
-Nothing is logged (this is intentional)
+1. Capture a frame from the IMX708 camera
+2. Detect a colored object using HSV (from Lesson 03)
+3. **If the object is detected**:
+   - Compute its pixel centroid (u, v)
+   - Query the robot firmware for current (x, y, z)
+   - Append one row to a CSV file
+4. **If the object is NOT visible**:
+   - Nothing is logged (this is intentional)
 
 This prevents garbage data.
 
-Files in this lesson
-lessons/04_camera_robot_calib/
-├── cam_robot_log_samples.py      # Main interactive logger
-├── cam_robot_samples.csv         # Primary dataset
-├── cam_robot_samples_exploration.csv  # Scratch / exploratory data
-├── debug/                        # Saved debug images (optional)
-└── README.md
+---
 
-Prerequisites (must be done first)
-1. Lesson 03 completed successfully
+## Files in this lesson
+
+```
+lessons/04_camera_robot_calib/
+├── cam_robot_log_samples.py
+├── cam_robot_samples.csv
+├── cam_robot_samples_exploration.csv
+├── debug/
+└── README.md
+```
+
+- **cam_robot_log_samples.py**  
+  Main interactive logger (camera + robot feedback)
+
+- **cam_robot_samples.csv**  
+  Primary dataset for calibration
+
+- **cam_robot_samples_exploration.csv**  
+  Scratch / exploratory data (optional)
+
+- **debug/**  
+  Saved raw / mask / annotated images (optional)
+
+---
+
+## Prerequisites (MUST be completed first)
+
+### Lesson 03 must be finished successfully
 
 You must already have:
 
+```
 lessons/03_vision_color_detection/hsv_config.json
+```
 
+This file defines **what color the camera is looking for**.
 
-This file defines what color the camera is looking for.
+If HSV is wrong → detection fails → **no samples are logged**.
 
-If HSV is wrong → detection fails → no samples logged.
+---
 
-2. Object placement rules (CRITICAL)
+## Object placement rules (CRITICAL)
 
 For valid samples:
 
-The object stays fixed on the table
-
-The robot moves
-
-The object must remain visible in the camera frame
+- The object stays **fixed** on the table
+- The robot **moves**
+- The object must remain **visible** in the camera frame
 
 If the object leaves the frame:
 
-Detection fails
+- Detection fails
+- (x, y, z) is **NOT recorded**
+- This is expected behavior
 
-(x,y,z) is NOT recorded
+---
 
-This is expected behavior
+## How to run the logger (TWO-TERMINAL WORKFLOW)
 
-How to run the logger (correct workflow)
-Terminal 1 – Camera + Logger (leave running)
+### Terminal 1 — Camera + Logger (leave running)
+
+```
 cd ~/RoArm
 source .venv/bin/activate
 python lessons/04_camera_robot_calib/cam_robot_log_samples.py
-
+```
 
 You will see:
 
+```
 === Lesson 04: Camera → Robot Sample Logger ===
 Controls:
-  ENTER  -> capture (u,v) + (x,y,z)
-  q      -> quit
+  ENTER -> capture (u,v) + (x,y,z)
+  q     -> quit
+```
 
+Do **not** close this terminal.
 
-Do not close this terminal.
+---
 
-Terminal 2 – Robot motion commands
+### Terminal 2 — Robot motion commands
 
-Use this terminal to move the arm between samples:
+Open a second terminal.
 
+```
 cd ~/RoArm
 source .venv/bin/activate
+```
 
+Move the robot between samples:
 
-Examples:
-
+```
 python roarm_simple_move.py home
 python roarm_simple_move.py goto_xyz 230 40 300
 python roarm_simple_move.py goto_xyz 210 -40 300
 python roarm_simple_move.py goto_xyz 260 0 300
+```
 
+After **each** move:
 
-After each move:
+1. Switch back to **Terminal 1**
+2. Press **ENTER once**
 
-Go back to Terminal 1
+---
 
-Press ENTER once to log a sample
-
-What a valid sample looks like
+## What a valid sample looks like
 
 Terminal output:
 
+```
 [OK #7] u,v=(164,313) x,y,z=(230.79,-18.80,289.69)
-
+```
 
 CSV row:
 
+```
 timestamp,u,v,x,y,z
 2025-12-13T12:50:58,504,331,59.63,-0.09,551.43
+```
 
+Meaning:
 
-This means:
+- Camera saw object at (u, v)
+- Robot reported (x, y, z)
+- The pair was saved for calibration
 
-The camera saw the object at pixel (u,v)
+---
 
-The robot reported its actual pose (x,y,z)
+## Common confusion points (IMPORTANT)
 
-The pair is now saved for calibration
+### Why (x, y, z) sometimes does not change
 
-Why (x,y,z) sometimes did not change
+(x, y, z) only changes **when the robot moves**.
 
-This caused confusion and is important:
+Pressing ENTER multiple times **without moving the arm** logs the same pose.
 
-(x,y,z) only changes when the robot actually moves
+This is correct behavior.
 
-Pressing ENTER repeatedly without moving the arm logs the same pose
+---
 
-This is expected and correct behavior
-
-To build a useful dataset:
-
-Move the robot
-
-Then press ENTER once
-
-Why nothing logs when the object is missing
+### Why nothing logs when the object is missing
 
 If you see:
 
+```
 [NO DETECTION]
-
+```
 
 That means:
 
-The HSV mask found no valid contour
-
-The object is out of frame or HSV is too strict
-
-No CSV row is written
+- HSV mask found no valid contour
+- Object is out of frame **or** HSV is too strict
+- **No CSV row is written**
 
 This is a safety feature, not a bug.
 
-Dataset requirement before Lesson 05
+---
 
-Before proceeding, you need:
+## Dataset requirement before Lesson 05
 
-Object fixed in place
+Before continuing:
 
-Robot moved to many different poses
+- Object fixed in place
+- Robot moved to many poses
+- (u, v) changes as (x, y, z) changes
+- **30–50 clean samples minimum**
 
-(u,v) changing as (x,y,z) changes
+Quick check:
 
-At least 30–50 clean samples
-
-You can verify quickly:
-
+```
 head lessons/04_camera_robot_calib/cam_robot_samples.csv
+```
 
+You should see variation in **both** camera and robot values.
 
-You should see variation in both (u,v) and (x,y,z).
+---
 
-What Lesson 05 will do
+## What Lesson 05 will do
 
 Lesson 05 will:
 
-Load cam_robot_samples.csv
+- Load cam_robot_samples.csv
+- Learn a mapping:
 
-Learn a mapping:
-
+```
 (u, v) → (x, y, z)
+```
 
+- Enable camera-guided robot motion
 
-Enable camera-guided robot motion
+Lesson 04 exists **only** to make Lesson 05 possible.
 
-Lesson 04 exists only to make Lesson 05 possible.
+---
 
-Summary (plain English)
+## Summary (plain English)
 
-HSV decides what pixels count
+- HSV decides what pixels count
+- Contours decide what object matters
+- (u, v) comes from vision
+- (x, y, z) comes from firmware feedback
+- We only log data when **both** are valid
 
-Contours decide what object matters
-
-(u,v) comes from vision
-
-(x,y,z) comes from firmware feedback
-
-We only log data when both are valid
-
-You now have a real calibration dataset
+You now have a real camera ↔ robot calibration dataset.
 
 This is real robotics work.
-
-Next step
-
-Once you confirm your CSV looks good:
-
-➡️ Proceed to Lesson 05 – Camera → Robot Calibration
-
-Now: how to add this README to GitHub
-
-From repo root:
-
-nano lessons/04_camera_robot_calib/README.md
-
-
-Paste everything above → save → exit.
-
-Then:
-
-git add lessons/04_camera_robot_calib/README.md
-git commit -m "Lesson 04 README: camera-robot sample logging workflow"
-git push origin main
