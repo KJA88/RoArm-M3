@@ -1,78 +1,110 @@
 #!/usr/bin/env python3
+"""
+inspect_center_hsv.py (better HSV capture)
 
-import cv2
+Problem we fix:
+- If the center patch is gray/dark (low saturation), Hue becomes meaningless and spans 0..179.
+- That makes the mask cover the whole image.
+
+Fix:
+- Only compute Hue stats on "good color" pixels: S>=60 and V>=60.
+- Also force S/V lower bounds to avoid gray background.
+
+Writes:
+  lessons/03_vision_color_detection/hsv_config.json
+  lessons/03_vision_color_detection/frame_with_patch.jpg
+"""
+
 import json
+from pathlib import Path
+import cv2
 import numpy as np
 
-IMAGE_PATH   = "frame.jpg"              # still image from camera_snap.py
-OUTPUT_IMAGE = "frame_with_patch.jpg"   # annotated preview
-HSV_CONFIG   = "hsv_config.json"        # auto-generated HSV config
+SCRIPT_DIR = Path(__file__).resolve().parent
+FRAME_PATH = SCRIPT_DIR / "frame.jpg"
+OUT_WITH_PATCH = SCRIPT_DIR / "frame_with_patch.jpg"
+OUT_JSON = SCRIPT_DIR / "hsv_config.json"
 
+PATCH_HALF = 12
+
+# "Good color" thresholds:
+S_GOOD = 60
+V_GOOD = 60
+
+# How tight the Hue window should be around the mean:
+H_WINDOW = 12  # +/- 12 degrees
+
+def clamp(v, lo, hi):
+    return int(max(lo, min(hi, v)))
 
 def main():
-    img = cv2.imread(IMAGE_PATH)
+    if not FRAME_PATH.exists():
+        print(f"ERROR: missing {FRAME_PATH}")
+        print("Run: python3 lessons/03_vision_color_detection/camera_snap.py")
+        return
+
+    img = cv2.imread(str(FRAME_PATH))
     if img is None:
-        print("ERROR: could not load image", IMAGE_PATH)
+        print(f"ERROR: could not load image {FRAME_PATH}")
         return
 
     h, w = img.shape[:2]
     cx, cy = w // 2, h // 2
 
-    # 40x40 center patch (size=20 -> 2*20)
-    size = 20
-    x1 = max(cx - size, 0)
-    x2 = min(cx + size, w)
-    y1 = max(cy - size, 0)
-    y2 = min(cy + size, h)
+    x1 = max(0, cx - PATCH_HALF)
+    y1 = max(0, cy - PATCH_HALF)
+    x2 = min(w, cx + PATCH_HALF)
+    y2 = min(h, cy + PATCH_HALF)
 
-    patch_bgr = img[y1:y2, x1:x2]
-    patch_hsv = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2HSV)
+    # Visual confirm image
+    vis = img.copy()
+    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.drawMarker(vis, (cx, cy), (255, 0, 0),
+                   markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+    cv2.imwrite(str(OUT_WITH_PATCH), vis)
 
-    hsv_vals = patch_hsv.reshape(-1, 3)
-    H = hsv_vals[:, 0].astype(np.int32)
-    S = hsv_vals[:, 1].astype(np.int32)
-    V = hsv_vals[:, 2].astype(np.int32)
+    patch = img[y1:y2, x1:x2]
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
 
-    print("Center patch size:", patch_hsv.shape)
-    print(f"H (0-179): mean={H.mean():.1f}, min={H.min()}, max={H.max()}")
-    print(f"S (0-255): mean={S.mean():.1f}, min={S.min()}, max={S.max()}")
-    print(f"V (0-255): mean={V.mean():.1f}, min={V.min()}, max={V.max()}")
+    H = hsv[:, :, 0].astype(np.int32)
+    S = hsv[:, :, 1].astype(np.int32)
+    V = hsv[:, :, 2].astype(np.int32)
 
-    # --- Build HSV range with a bit of margin around the patch values ---
-    h_min = max(H.min() - 5, 0)
-    h_max = min(H.max() + 5, 179)
-    s_min = max(S.min() - 30, 0)
-    s_max = 255
-    v_min = max(V.min() - 30, 0)
-    v_max = 255
+    good = (S >= S_GOOD) & (V >= V_GOOD)
+    good_count = int(good.sum())
+    total = H.size
+    print(f"Patch good-color pixels: {good_count}/{total} ({100.0*good_count/total:.1f}%)")
 
-    lower = [int(h_min), int(s_min), int(v_min)]
-    upper = [int(h_max), int(s_max), int(v_max)]
+    if good_count < 20:
+        print("ERROR: center patch is mostly gray/dark (low saturation).")
+        print("Put the OBJECT you want to track dead-center and re-run camera_snap + this script.")
+        return
 
-    cfg = {"lower": lower, "upper": upper}
-    with open(HSV_CONFIG, "w") as f:
-        json.dump(cfg, f, indent=2)
+    Hg = H[good]
+    Sg = S[good]
+    Vg = V[good]
 
-    print("Wrote HSV config to", HSV_CONFIG)
-    print("  LOWER_HSV:", lower)
-    print("  UPPER_HSV:", upper)
+    h_mean = float(Hg.mean())
+    s_min, s_max = int(Sg.min()), int(Sg.max())
+    v_min, v_max = int(Vg.min()), int(Vg.max())
 
-    # --- Draw the patch so you SEE what was used ---
-    annotated = img.copy()
-    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)  # green box
-    cv2.drawMarker(
-        annotated,
-        (cx, cy),
-        (255, 0, 0),   # blue cross at image center
-        markerType=cv2.MARKER_CROSS,
-        markerSize=20,
-        thickness=2,
-    )
+    # Tight Hue bounds around mean
+    h_lo = int(round(h_mean - H_WINDOW))
+    h_hi = int(round(h_mean + H_WINDOW))
 
-    cv2.imwrite(OUTPUT_IMAGE, annotated)
-    print("Saved annotated image with patch to", OUTPUT_IMAGE)
-    print(f"Patch bounds: x1={x1}, x2={x2}, y1={y1}, y2={y2}")
+    # Handle wrap edges for "red-ish" near 0 or 179 by clamping
+    h_lo = clamp(h_lo, 0, 179)
+    h_hi = clamp(h_hi, 0, 179)
 
+    # Force S/V lower bounds to avoid gray/background
+    lower = [h_lo, max(80, s_min - 10), max(60, v_min - 10)]
+    upper = [h_hi, min(255, s_max + 10), min(255, v_max + 10)]
+
+    OUT_JSON.write_text(json.dumps({"lower": lower, "upper": upper}, indent=2))
+    print("Wrote:", OUT_JSON)
+    print("Patch image:", OUT_WITH_PATCH)
+    print("lower:", lower)
+    print("upper:", upper)
 
 if __name__ == "__main__":
     main()

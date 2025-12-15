@@ -14,35 +14,46 @@ camera_color_localize_picam2.py
 
 import time
 import json
-import os
+from pathlib import Path
 
 import cv2
 import numpy as np
 from picamera2 import Picamera2
 
-IMAGE_RAW  = "cam_live_frame.jpg"
-IMAGE_MASK = "cam_live_mask.jpg"
-IMAGE_ANN  = "cam_live_annotated.jpg"
-HSV_CONFIG = "hsv_config.json"
+# ---------------- Paths (ROBUST) ----------------
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+HSV_CONFIG = SCRIPT_DIR / "hsv_config.json"
+
+IMAGE_RAW  = SCRIPT_DIR / "cam_live_frame.jpg"
+IMAGE_MASK = SCRIPT_DIR / "cam_live_mask.jpg"
+IMAGE_ANN  = SCRIPT_DIR / "cam_live_annotated.jpg"
+
+
+# ---------------- HSV Loading ----------------
 
 def load_hsv_range():
-    if not os.path.exists(HSV_CONFIG):
+    if not HSV_CONFIG.exists():
         raise FileNotFoundError(
-            f"{HSV_CONFIG} not found. Run camera_snap.py + "
-            f"inspect_center_hsv.py first to generate it."
+            f"{HSV_CONFIG} not found. "
+            f"Run camera_snap.py + inspect_center_hsv.py first."
         )
 
-    with open(HSV_CONFIG, "r") as f:
+    with HSV_CONFIG.open("r") as f:
         cfg = json.load(f)
 
     lower = np.array(cfg["lower"], dtype=np.uint8)
     upper = np.array(cfg["upper"], dtype=np.uint8)
-    print("Loaded HSV range from", HSV_CONFIG)
+
+    print("Loaded HSV range from:", HSV_CONFIG)
     print("  LOWER_HSV:", lower.tolist())
     print("  UPPER_HSV:", upper.tolist())
+
     return lower, upper
 
+
+# ---------------- Main ----------------
 
 def main():
     lower_hsv, upper_hsv = load_hsv_range()
@@ -56,12 +67,12 @@ def main():
     picam2.start()
     time.sleep(1.0)
 
-    # With format="RGB888", capture_array() returns a BGR-style array for OpenCV
+    # capture_array() is OpenCV-compatible in this pipeline
     frame = picam2.capture_array()
     picam2.close()
 
     print("Captured frame shape:", frame.shape)
-    cv2.imwrite(IMAGE_RAW, frame)
+    cv2.imwrite(str(IMAGE_RAW), frame)
     print("Saved raw frame to", IMAGE_RAW)
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -71,7 +82,7 @@ def main():
     mask = cv2.erode(mask, kernel, iterations=1)
     mask = cv2.dilate(mask, kernel, iterations=2)
 
-    cv2.imwrite(IMAGE_MASK, mask)
+    cv2.imwrite(str(IMAGE_MASK), mask)
     print("Saved mask to", IMAGE_MASK)
 
     contours, _ = cv2.findContours(
@@ -79,19 +90,20 @@ def main():
     )
 
     if not contours:
-        print("No contours found — object might be out of view or HSV off.")
+        print("No contours found — object may be out of view or HSV incorrect.")
         return
 
     largest = max(contours, key=cv2.contourArea)
     area = cv2.contourArea(largest)
     print(f"Largest contour area: {area:.1f} pixels")
+
     if area < 100:
         print("Largest contour too small (likely noise).")
         return
 
     M = cv2.moments(largest)
     if M["m00"] == 0:
-        print("Cannot compute centroid (m00=0).")
+        print("Cannot compute centroid (m00 = 0).")
         return
 
     cx = int(M["m10"] / M["m00"])
@@ -99,20 +111,20 @@ def main():
     print(f"Centroid pixel (u, v) = ({cx}, {cy})")
 
     annotated = frame.copy()
-    cv2.circle(annotated, (cx, cy), 8, (0, 0, 255), -1)        # red dot
-    cv2.drawContours(annotated, [largest], -1, (0, 255, 0), 2) # green outline
+    cv2.circle(annotated, (cx, cy), 8, (0, 0, 255), -1)
+    cv2.drawContours(annotated, [largest], -1, (0, 255, 0), 2)
 
     h, w = annotated.shape[:2]
     cv2.drawMarker(
         annotated,
         (w // 2, h // 2),
-        (255, 0, 0),   # blue crosshair
+        (255, 0, 0),
         markerType=cv2.MARKER_CROSS,
         markerSize=20,
         thickness=2,
     )
 
-    cv2.imwrite(IMAGE_ANN, annotated)
+    cv2.imwrite(str(IMAGE_ANN), annotated)
     print("Saved annotated frame to", IMAGE_ANN)
 
 

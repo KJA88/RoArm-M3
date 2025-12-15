@@ -8,3 +8,6 @@ samples*.csv
 *.bak
 archive/*
 hsv_config.json
+# Camera debug images
+*.jpg
+*.png
