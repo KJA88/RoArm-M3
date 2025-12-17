@@ -11,3 +11,19 @@ hsv_config.json
 # Camera debug images
 *.jpg
 *.png
+# Python virtual environments
+.venv/
+venv/
+ENV/
+
+# Binary files and archives
+*.bin
+*.zip
+*.tar.gz
+
+# VS Code settings
+.vscode/
+
+# Logs and temp files
+*.log
+__pycache__/
