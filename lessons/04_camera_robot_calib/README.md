@@ -240,3 +240,126 @@ Lesson 04 exists **only** to make Lesson 05 possible.
 You now have a real camera ↔ robot calibration dataset.
 
 This is real robotics work.
+
+Addendum: Execution Notes & Clarifications (Does NOT replace the notes above)
+
+This addendum documents practical details discovered during execution of Lesson 04.
+It does not alter the original lesson intent, only clarifies how it was applied.
+
+A. Eye-to-hand vs eye-in-hand (explicit)
+
+Lesson 04 was executed in eye-to-hand configuration:
+
+Camera is fixed in the environment
+
+Robot base frame is fixed
+
+The object is moved
+
+The robot may remain fixed during sampling
+
+This results in datasets where:
+
+(u, v) varies significantly
+
+(x, y, z) may remain constant
+
+This is intentional and valid for learning a camera → robot mapping.
+
+The original lesson text also describes a variant where the robot moves instead.
+Both approaches are valid; the eye-to-hand variant was used in practice because it:
+
+simplifies initial mapping
+
+avoids compounding robot motion and vision error
+
+produces a clean first dataset for Lesson 05
+
+B. Why the robot can remain fixed in practice
+
+Although the lesson text mentions moving the robot between samples, Lesson 04 was successfully completed with:
+
+Robot held at a fixed “home” pose
+
+Object moved to multiple positions on the table
+
+This still produces a correct dataset for learning:
+
+(u, v) → object position relative to robot base
+
+
+Lesson 05 will use offsets from this reference pose, not absolute pose reconstruction.
+
+C. CSV files and Git tracking
+
+The following files are runtime artifacts, not source code:
+
+cam_robot_samples.csv
+
+cam_robot_samples_exploration.csv
+
+debug/
+
+They are intentionally ignored by Git:
+
+Each run produces session-specific data
+
+Calibration data is environment-dependent
+
+Keeping them out of version control prevents confusion and noise
+
+If a reference dataset is ever needed, it should be added explicitly as a labeled example.
+
+D. Debug images (mirroring Lesson 03)
+
+The logger optionally writes debug images on each ENTER press:
+
+Raw frame
+
+HSV mask
+
+Annotated detection with centroid
+
+These images are overwritten each time and exist solely to answer:
+
+Why did detection fail?
+
+Is HSV too strict?
+
+Is lighting or shadow the cause?
+
+They are diagnostic only and not part of the calibration dataset.
+
+E. Sample count guidance (practical vs formal)
+
+The original lesson text mentions 30–50 samples.
+
+In practice:
+
+6–10 well-distributed samples are sufficient for a first demo
+
+More samples improve robustness but are not required initially
+
+Lesson 05 starts with a simple linear mapping, not a full calibration model
+
+The dataset collected during execution used ~9 samples, which is appropriate for rapid progress.
+
+F. Scope boundary (important)
+
+Lesson 04 answers one question only:
+
+Can we reliably log synchronized (u, v) and (x, y, z) pairs without corruption?
+
+It does not:
+
+perform calibration
+
+fit a model
+
+move the robot autonomously
+
+perform grasping
+
+Those behaviors begin in Lesson 05.
+
+End of Addendum
