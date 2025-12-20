@@ -7,9 +7,9 @@ Purpose:
     1) Detect colored object -> (u,v) pixel centroid (HSV threshold)
     2) Ask robot for feedback -> (x,y,z)
     3) Append CSV row: timestamp,u,v,x,y,z
+    4) Save debug images (raw, mask, annotated) overwriting each time
 """
 
-import argparse
 import csv
 import json
 import os
@@ -31,13 +31,17 @@ except ImportError:
 # PATHS (EXPLICIT, NO GUESSING)
 # ============================================================
 
-SCRIPT_DIR = Path(__file__).resolve().parent          # RoArm/lessons/04_camera_robot_calib
-LESSONS_DIR = SCRIPT_DIR.parent                       # RoArm/lessons
-REPO_ROOT = LESSONS_DIR.parent                        # RoArm
+SCRIPT_DIR = Path(__file__).resolve().parent
+LESSONS_DIR = SCRIPT_DIR.parent
+REPO_ROOT = LESSONS_DIR.parent
 
 HSV_PATH = REPO_ROOT / "lessons/03_vision_color_detection/hsv_config.json"
 CSV_PATH = SCRIPT_DIR / "cam_robot_samples.csv"
 DEBUG_DIR = SCRIPT_DIR / "debug"
+
+DEBUG_RAW = DEBUG_DIR / "latest_raw.jpg"
+DEBUG_MASK = DEBUG_DIR / "latest_mask.jpg"
+DEBUG_ANN  = DEBUG_DIR / "latest_annotated.jpg"
 
 
 # ============================================================
@@ -87,28 +91,29 @@ def find_largest_blob(bgr, lower, upper):
     )
 
     if not contours:
-        return None, mask, 0
+        return None, mask
 
     c = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(c)
-    if area < 50:
-        return None, mask, len(contours)
+    if cv2.contourArea(c) < 50:
+        return None, mask
 
     M = cv2.moments(c)
     if M["m00"] == 0:
-        return None, mask, len(contours)
+        return None, mask
 
     cx = int(M["m10"] / M["m00"])
     cy = int(M["m01"] / M["m00"])
 
-    return (cx, cy, c), mask, len(contours)
+    return (cx, cy, c), mask
 
 
 def annotate(frame, blob):
     out = frame.copy()
     h, w = out.shape[:2]
 
-    cv2.drawMarker(out, (w // 2, h // 2), (255, 0, 0),
+    # Image center
+    cv2.drawMarker(out, (w // 2, h // 2),
+                   (255, 0, 0),
                    cv2.MARKER_CROSS, 20, 2)
 
     if blob:
@@ -119,6 +124,12 @@ def annotate(frame, blob):
                     (cx + 10, cy),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (0, 0, 255), 2)
+    else:
+        cv2.putText(out, "NO DETECTION",
+                    (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2, (0, 0, 255), 3)
+
     return out
 
 
@@ -138,8 +149,7 @@ class RoArmSerial:
         self.ser.close()
 
     def send(self, obj):
-        msg = json.dumps(obj) + "\n"
-        self.ser.write(msg.encode())
+        self.ser.write((json.dumps(obj) + "\n").encode())
 
     def read_json(self, timeout=1.5):
         t0 = time.time()
@@ -184,9 +194,7 @@ def append_csv(path, u, v, x, y, z):
 
 def main():
     if not HSV_PATH.exists():
-        print("ERROR: HSV config not found:")
-        print(" ", HSV_PATH)
-        print("Run Lesson 03 first.")
+        print("ERROR: HSV config not found:", HSV_PATH)
         return
 
     DEBUG_DIR.mkdir(exist_ok=True)
@@ -203,7 +211,6 @@ def main():
 
     picam2 = init_camera()
     robot = RoArmSerial()
-
     count = 0
 
     try:
@@ -213,16 +220,16 @@ def main():
                 break
 
             frame = capture_frame(picam2)
-            blob, mask, _ = find_largest_blob(frame, lower, upper)
+            blob, mask = find_largest_blob(frame, lower, upper)
 
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Always save debug images (overwrite)
+            cv2.imwrite(str(DEBUG_RAW), frame)
+            cv2.imwrite(str(DEBUG_MASK), mask)
 
-            cv2.imwrite(str(DEBUG_DIR / f"{ts}_raw.jpg"), frame)
-            cv2.imwrite(str(DEBUG_DIR / f"{ts}_mask.jpg"), mask)
+            ann = annotate(frame, blob)
+            cv2.imwrite(str(DEBUG_ANN), ann)
 
             if not blob:
-                cv2.imwrite(str(DEBUG_DIR / f"{ts}_annotated.jpg"),
-                            annotate(frame, None))
                 print("[NO DETECTION]")
                 continue
 
@@ -231,9 +238,6 @@ def main():
 
             append_csv(CSV_PATH, cx, cy, x, y, z)
             count += 1
-
-            ann = annotate(frame, blob)
-            cv2.imwrite(str(DEBUG_DIR / f"{ts}_annotated.jpg"), ann)
 
             print(f"[OK #{count}] u,v=({cx},{cy}) x,y,z=({x:.2f},{y:.2f},{z:.2f})")
 

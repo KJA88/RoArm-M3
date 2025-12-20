@@ -27,3 +27,14 @@ ENV/
 # Logs and temp files
 *.log
 __pycache__/
+# Vision artifacts
+lessons/03_vision_color_detection/frame*.jpg
+lessons/03_vision_color_detection/cam_live_*.jpg
+
+# Calibration artifacts
+lessons/04_camera_robot_calib/*.csv
+lessons/04_camera_robot_calib/debug/
+lessons/04_camera_robot_calib/debug_old/
+
+# Workspace / scratch
+roarm_ws/
