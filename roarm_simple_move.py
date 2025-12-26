@@ -485,8 +485,8 @@ def build_arg_parser():
     p_go.add_argument(
         "--zmin",
         type=float,
-        default=150.0,
-        help="Safety minimum Z in mm (default: 150.0)",
+        default=-120.0,
+        help="Safety minimum Z in mm (default: -120.0)",
     )
     p_go.add_argument(
         "--refine",

@@ -7,7 +7,7 @@ s = serial.Serial(PORT, 115200, timeout=1)
 s.setRTS(False)
 s.setDTR(False)
 
-s.write(b'{"T":210}\n')
+s.write(b'{"T":210,"cmd":0}\n')
 time.sleep(0.2)
 
 print("Torque OFF sent (T=210).")
