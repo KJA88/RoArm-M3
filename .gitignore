@@ -38,3 +38,5 @@ lessons/04_camera_robot_calib/debug_old/
 
 # Workspace / scratch
 roarm_ws/
+_archive/
+calibration_experiments/

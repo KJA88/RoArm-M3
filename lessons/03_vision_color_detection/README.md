@@ -1,166 +1,94 @@
-## Lesson 03 – Vision: Color-Based Object Detection (IMX708)
+# Lesson 03 – Vision: Color-Based Object Detection (FINAL)
 
-This lesson builds a small, reusable pipeline to:
+This lesson provides a clean, reusable vision module for detecting colored objects
+in camera pixel space using HSV thresholding.
 
-1. Capture a still image from the IMX708 camera.
-2. Calibrate the color of a target object from a center patch.
-3. Detect that object in a new frame and return its pixel position `(u, v)`.
+## Scope (Important)
 
-All commands are run from the repo root:
+Lesson 03 answers **one question only**:
 
-    cd ~/RoArm
+> Can the camera reliably detect one or more colored objects and return their pixel
+> centroids `(u, v)`?
 
----
+This lesson does **not**:
+- Move the robot
+- Perform IK or FK
+- Map pixels to world coordinates
+- Perform calibration math
 
-### 1. Capture a still frame
-
-Put the target object roughly in the center of the camera view (e.g., blue vacuum or red cylinder), then:
-
-    python3 lessons/03_vision_color_detection/camera_snap.py
-
-Outputs:
-
-- `frame.jpg` – raw BGR image from the camera.
+Those steps happen in later lessons.
 
 ---
 
-### 2. Calibrate the object’s color (HSV) from the center patch
+## Files Overview
 
-    python3 lessons/03_vision_color_detection/inspect_center_hsv.py
+### Core Tools (Authoritative)
 
-This script:
+- `quick_hsv_calibrate.py`  
+  Single-step HSV calibration tool. Captures one frame, samples the image center,
+  and writes an HSV config.
 
-- Takes a small patch around the image center.
-- Converts it to HSV and computes statistics.
-- Draws the sampled patch and center cross:
+- `camera_dual_color_test.py`  
+  Vision-only test that loads multiple HSV configs and prints detected centroids.
 
-  - `frame_with_patch.jpg` – original frame with:
-    - Green rectangle = sampled patch.
-    - Blue cross = image center.
+- `hsv_utils.py`  
+  Shared helper for loading HSV configs.
 
-- Writes the HSV range to:
+### Data
 
-  - `hsv_config.json` – contains:
+- `hsv/default.json`  
+  Canonical single-object HSV configuration.
 
-        {
-          "lower": [Hmin, Smin, Vmin],
-          "upper": [Hmax, Smax, Vmax]
-        }
+- `hsv/chess_white.json`  
+  Explicit HSV config for white chess pieces.
 
-> Make sure the green rectangle lies mostly on the object you care about.  
-> If not, reposition the object, re-run `camera_snap.py`, then `inspect_center_hsv.py`.
-
----
-
-### 3. Detect the calibrated object and get `(u, v)`
-
-    python3 lessons/03_vision_color_detection/camera_color_localize_picam2.py
-
-This script:
-
-- Loads `hsv_config.json`.
-- Captures a new frame from the camera.
-- Builds an HSV mask and finds the largest blob of that color.
-- Prints the object’s centroid in pixel coordinates:
-
-      Centroid pixel (u, v) = (u_val, v_val)
-
-- Saves debug images:
-
-  - `cam_live_frame.jpg` – raw camera frame.
-  - `cam_live_mask.jpg` – binary mask (white = detected color).
-  - `cam_live_annotated.jpg` –:
-    - Green contour = detected object blob.
-    - Red dot = centroid `(u, v)`.
-    - Blue cross = image center.
+- `hsv/tool_marker.json`  
+  HSV config for the tool-mounted visual marker.
 
 ---
 
-### 4. (Optional) Single camera+robot sample
+## Workflow
 
-`cam_robot_sample_once.py` is a helper for the next lesson. It is intended to:
+### 1. Calibrate an object (single command)
 
-- Read the object’s pixel location `(u, v)` using the same HSV pipeline.
-- Query the robot for its current end-effector pose `(x, y, z)`.
-- Print a single combined sample.
+Place the object at the **center of the camera view**, then run:
 
-This will be extended later into a logger that builds a dataset of `(u, v, x, y, z)` pairs for camera→robot calibration.
+```bash
+python3 quick_hsv_calibrate.py
+This writes to:
 
-Addendum: Practical Notes & Debugging Guidance (Does NOT replace the notes above)
+pgsql
+Copy code
+hsv/default.json
+To create an explicit named config:
 
-This section adds context learned during real use of the pipeline.
-It does not change the intended flow described above.
+bash
+Copy code
+python3 quick_hsv_calibrate.py chess_white.json
+python3 quick_hsv_calibrate.py tool_marker.json
+Each run also saves:
 
-A. About lighting, shadows, and HSV robustness
+mipsasm
+Copy code
+frame_with_square.jpg
+for visual confirmation.
 
-HSV calibration in Step 2 captures the object’s color under one lighting condition.
-In practice:
+2. Validate detection (no robot involved)
+bash
+Copy code
+python3 camera_dual_color_test.py
+This prints detected centroids:
 
-Shadows primarily affect V (Value)
+yaml
+Copy code
+Chess: (u, v) | Tool: (u, v)
+Move objects independently to confirm stable detection.
 
-Matte or reflective surfaces affect S (Saturation)
+Deprecated Files
+Older learning scripts have been archived in _deprecated/ and are no longer used.
+They are kept only for reference.
 
-Hue (H) is usually the most stable channel
+Freeze Rule
+Lesson 03 is frozen after this point.
 
-If detection fails when the object is partially shadowed or near the edges of the image:
-
-Loosen Vmin first
-
-Then loosen Smin if needed
-
-Avoid widening H unless background noise appears
-
-This is expected behavior for fixed-threshold HSV pipelines.
-
-B. Why detection is stronger near the image center
-
-Objects near the center of the frame typically detect more cleanly because:
-
-Illumination is more uniform
-
-Lens distortion is lower
-
-Vignetting is reduced
-
-Near image edges, partial detection is normal.
-For downstream robotics tasks, stable centroid estimation matters more than perfect segmentation.
-
-C. Debug image outputs
-
-The following images are written by the detection script to aid debugging:
-
-cam_live_frame.jpg – raw camera image
-
-cam_live_mask.jpg – HSV threshold mask
-
-cam_live_annotated.jpg – detected contour + centroid
-
-These files are diagnostic artifacts, not source data, and are intentionally ignored by Git.
-
-They are meant to answer:
-
-Why did detection fail?
-
-Is HSV too narrow?
-
-Is lighting the issue?
-
-D. Scope of this lesson (important)
-
-Lesson 03 is vision-only.
-
-It answers one question:
-
-Can the camera reliably localize a colored object in pixel space (u, v)?
-
-It does not:
-
-Perform calibration
-
-Move the robot
-
-Map pixels to world coordinates
-
-Those steps intentionally happen in later lessons.
-
-End of Addendum
+Future lessons import vision utilities from here but do not modify this lesson.

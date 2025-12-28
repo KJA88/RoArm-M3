@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """
-Lesson 06 – Base Yaw Vision Tracking (STABLE)
-Headless
-Early-stop using image geometry
-Graceful terminal quit
-NO GUI
+Lesson 06 — Geometry-Aware Base Yaw Alignment (Eye-to-Hand)
+FINAL MOTION-ENABLED VERSION
+
+- Headless (no GUI)
+- Base yaw only (Joint 1)
+- Fixed Z height
+- Early-stop using image geometry
+- Intentional stop + hold
+- Torque-safe exit
 """
 
 import time
 import json
+import os
+import sys
+import select
 import numpy as np
 import cv2
 from picamera2 import Picamera2
 from roarm_sdk.roarm import roarm
-import os
-import sys
-import select
 
-# ===============================
-# SAFE JOINT LIMITS (DEGREES)
-# ===============================
+# ============================================================
+# SAFE JOINT CONFIG (DEGREES)
+# ============================================================
 BASE_HOME = 0
 BASE_MIN  = -60
 BASE_MAX  =  60
@@ -32,29 +36,32 @@ GRIP_OPEN     = 30
 SPEED = 800
 ACC   = 50
 
-# ===============================
-# CONTROL PARAMS
-# ===============================
+# ============================================================
+# CONTROL PARAMETERS
+# ============================================================
 GAIN          = 0.05
 MAX_BASE_STEP = 3.0
-DEADZONE      = 5
+DEADZONE_PX   = 5
 
-# ===============================
-# LOAD HSV CONFIG
-# ===============================
+# ============================================================
+# HSV CONFIG (AUTHORITATIVE LOCATION)
+# ============================================================
 HSV_PATH = os.path.expanduser(
-    "~/RoArm/lessons/03_vision_color_detection/hsv_config.json"
+    "~/RoArm/lessons/03_vision_color_detection/hsv/tool_marker.json"
 )
+
+if not os.path.exists(HSV_PATH):
+    raise FileNotFoundError(f"HSV config not found: {HSV_PATH}")
 
 with open(HSV_PATH, "r") as f:
     hsv_cfg = json.load(f)
 
-hsv_min = np.array(hsv_cfg["lower"])
-hsv_max = np.array(hsv_cfg["upper"])
+HSV_MIN = np.array(hsv_cfg["lower"], dtype=np.uint8)
+HSV_MAX = np.array(hsv_cfg["upper"], dtype=np.uint8)
 
-# ===============================
-# INIT ARM
-# ===============================
+# ============================================================
+# INITIALIZE ROBOT
+# ============================================================
 arm = roarm(
     roarm_type="roarm_m3",
     port="/dev/ttyUSB0",
@@ -71,12 +78,12 @@ arm.joint_angle_ctrl(4, WRIST_SAFE, SPEED, ACC)
 arm.gripper_angle_ctrl(GRIP_OPEN, SPEED, ACC)
 time.sleep(1)
 
-print("=== BASE YAW TRACKING (STABLE) ===")
-print("Type 'q' + Enter to quit safely")
+print("\n=== LESSON 06: BASE YAW GEOMETRIC ALIGNMENT (MOTION ENABLED) ===")
+print("Press 'q' + Enter to quit safely\n")
 
-# ===============================
-# CAMERA
-# ===============================
+# ============================================================
+# CAMERA SETUP
+# ============================================================
 picam2 = Picamera2()
 cfg = picam2.create_still_configuration(
     main={"format": "RGB888", "size": (1280, 720)}
@@ -84,20 +91,23 @@ cfg = picam2.create_still_configuration(
 picam2.configure(cfg)
 picam2.start()
 
-# ===============================
+IMG_CENTER_X = 640
+IMG_CENTER_Y = 360
+
+# ============================================================
 # STATE
-# ===============================
+# ============================================================
 base_angle = BASE_HOME
 hold_base  = False
 last_du = None
 last_dv = None
 
-# ===============================
+# ============================================================
 # MAIN LOOP
-# ===============================
+# ============================================================
 try:
     while True:
-        # ---- terminal quit (no GUI) ----
+        # -------- terminal quit --------
         if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
             if sys.stdin.readline().strip().lower() == "q":
                 print("Quit requested — holding position")
@@ -105,7 +115,7 @@ try:
 
         frame = picam2.capture_array()
         hsv   = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask  = cv2.inRange(hsv, hsv_min, hsv_max)
+        mask  = cv2.inRange(hsv, HSV_MIN, HSV_MAX)
 
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -127,19 +137,19 @@ try:
         u = int(M["m10"] / M["m00"])
         v = int(M["m01"] / M["m00"])
 
-        du = u - 640
-        dv = v - 360
+        du = u - IMG_CENTER_X
+        dv = v - IMG_CENTER_Y
 
-        # ---- early stop (geometry) ----
+        # -------- early-stop geometry --------
         if not hold_base and last_du is not None and last_dv is not None:
             if abs(du) < abs(last_du) and abs(dv) > abs(last_dv):
-                print("EARLY STOP — PASSED OBJECT")
+                print("EARLY STOP — passed object projection")
                 hold_base = True
 
         last_du = du
         last_dv = dv
 
-        if hold_base or abs(du) <= DEADZONE:
+        if hold_base or abs(du) <= DEADZONE_PX:
             time.sleep(0.05)
             continue
 
@@ -157,4 +167,4 @@ except KeyboardInterrupt:
 
 finally:
     picam2.close()
-    print("Exited cleanly. Torque still ON.")
+    print("Exited cleanly. Torque remains ON.")
