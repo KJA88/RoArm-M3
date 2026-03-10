@@ -309,3 +309,13 @@ This repo demonstrates:
 
 The intent is that another engineer—or another AI—can open this repo and **safely continue from here** without rediscovering all the hard parts.
 ::contentReference[oaicite:0]{index=0}
+
+## System Governance & Architecture
+
+The authoritative system design and project rules are defined in:
+
+- docs/00_AUTHORITATIVE/SYSTEM_DESIGN.md
+- docs/00_AUTHORITATIVE/REPO_BOUNDARIES.md
+- docs/00_AUTHORITATIVE/ARCHITECTURE_DECISIONS.md
+
+These documents govern all milestones, lessons, and implementations.

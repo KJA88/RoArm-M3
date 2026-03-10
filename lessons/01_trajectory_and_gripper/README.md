@@ -1,118 +1,182 @@
-## Lesson 01 – Trajectory Streaming & Gripper Control
+## Lesson 01 – Cartesian Trajectory Streaming & Gripper Control
 
-**Intent**
+### Intent
 
-This lesson proves that the RoArm-M3 Pro can be:
+This lesson establishes **foundational control authority** over the RoArm-M3 Pro.
 
-- Driven in **task space** using the firmware’s internal IK (T=104 / T=1041).
-- Streamed along smooth **line/circle trajectories**.
-- Controlled at the **gripper** level safely (open/close sweeps, angle mapping).
+It proves that the robot can be:
 
-This is your “I can actually move a real robot arm in a controlled way” lesson.
+- Driven directly in **Cartesian (task) space**, not joint space.
+- Controlled using the firmware’s **internal inverse kinematics** (T=104 / T=1041).
+- Streamed along **continuous, real-time trajectories** at a fixed update rate.
+- Operated safely with **explicit gripper limits and state discipline**.
+
+This is not a visualization or replay lesson.  
+It is a **real-time motion control** lesson.
 
 All commands are run from the repo root:
 
-    cd ~/RoArm
+```bash
+cd ~/RoArm
+Demo Scripts (Lesson 01 Showcase)
+Lesson 01 intentionally includes only a small number of high-signal demos.
+Each demo exists to prove a specific control capability.
 
----
+1. Parametric Lissajous Trajectory (Primary Demo)
+Script:
+lessons/01_trajectory_and_gripper/demo_lissajous.py
 
-### 1. Circle / Helix Trajectory Demo
+This demo streams a smooth 3D parametric figure-eight (Lissajous) trajectory in Cartesian space.
 
-Script: `lessons/01_trajectory_and_gripper/circle_demo.py`
+What it does:
 
-This demo:
+Torques the arm on.
 
-- Torques the arm on.
-- Moves to a known start pose using T=104.
-- Streams a **circular or helical path** using T=1041:
-  - (x, y) follow a circle.
-  - z can be flat or sinusoidal (helix).
-- Returns to a safe “candle” pose.
-- Requests one T=105 feedback packet and prints XYZ.
+Moves to a known start pose using a blocking Cartesian move (T=104).
 
-Run:
+Streams a time-parameterized Cartesian trajectory using T=1041 at a fixed rate.
 
-    python3 lessons/01_trajectory_and_gripper/circle_demo.py
+Generates coordinated X, Y, and Z motion from analytic parametric equations.
 
-Key parameters inside the script:
+Returns the arm to a known, safe neutral pose.
 
-- `R` – circle radius (mm).
-- `REVOLUTIONS` – number of laps.
-- `steps` – points per revolution (smoothness).
-- `dt` – time between points (~trajectory frequency).
-- `AMP` – vertical amplitude for helix (set `AMP = 0` for flat circle).
+What this demonstrates:
 
-This script demonstrates:
+Task-space control without manual joint angle planning.
 
-- Streaming Cartesian commands at a steady rate.
-- Understanding of the vendor’s T=104 / T=1041 interface.
-- Safe return-to-home after the demo.
+Stable real-time streaming (no stop-and-go motion).
 
----
+Trust in the firmware’s IK under continuous motion.
 
-### 2. Line Trajectory Demo (if present)
-
-Script: `lessons/01_trajectory_and_gripper/line_demo.py` (optional)
-
-Similar to the circle demo but:
-
-- Generates a **straight-line path** in task space between two XYZ points.
-- Streams that path using T=1041.
+Deterministic, repeatable trajectories driven from Python.
 
 Run:
 
-    python3 lessons/01_trajectory_and_gripper/line_demo.py
+bash
+Copy code
+python3 lessons/01_trajectory_and_gripper/demo_lissajous.py
+2. Constant-Speed Parametric Trajectory (Advanced Control)
+Script:
+lessons/01_trajectory_and_gripper/demo_lissajous_constant_speed.py
 
-This demonstrates joint-space / task-space thinking and simple path planning.
+This demo executes the same geometric Lissajous path as the primary demo, but re-parameterized to maintain approximately constant end-effector speed along the curve.
 
----
+What it adds beyond the basic Lissajous demo:
 
-### 3. Gripper Tools
+Separation of path geometry from motion timing.
 
-#### 3.1 High-level gripper control
+Approximate arc-length normalization to reduce velocity variation.
 
-Script: `lessons/01_trajectory_and_gripper/roarm_gripper.py`
+Visually uniform motion through high-curvature regions.
 
-Provides a small Python interface for the gripper:
+What this demonstrates:
 
-- Converts desired “open/close” levels into the correct servo angle.
-- Handles safety limit:
-  - **Never command below ~1.2 rad** to avoid stalling.
-- Can be imported by other scripts.
+Understanding of time-vs-distance effects in trajectory generation.
 
-Usage pattern inside other scripts:
+Motion planning concepts used in industrial robot controllers.
 
-    from lessons/01_trajectory_and_gripper.roarm_gripper import set_gripper
+Attention to motion quality, not just path correctness.
 
-    set_gripper(ser, angle_rad=2.8)  # nearly closed, but safe
-
-#### 3.2 Gripper sweep / characterization
-
-Script: `lessons/01_trajectory_and_gripper/gripper_sweep.py`
-
-This utility:
-
-- Sweeps the gripper through a set of angles.
-- Lets you visually verify:
-  - Which command values correspond to “open”, “pinched”, “almost stalled”.
-- Confirms the mapping you measured (e.g. 1.2 rad ≈ 114°, 3.2 rad = fully closed).
+This demo exists specifically to show motion intelligence, not just math.
 
 Run:
 
-    python3 lessons/01_trajectory_and_gripper/gripper_sweep.py
+bash
+Copy code
+python3 lessons/01_trajectory_and_gripper/demo_lissajous_constant_speed.py
+3. Volumetric Spiral / Helix Trajectory
+Script:
+lessons/01_trajectory_and_gripper/demo_spiral.py
 
-Safety:
+This demo streams a volumetric spiral / helix through Cartesian space.
 
-- Keep fingers clear.
-- Stop if the gripper obviously stalls or buzzes.
+What it does:
 
----
+Uses continuous streaming (T=1041) to coordinate X, Y, and Z motion.
 
-### Lesson 01 Takeaways
+Demonstrates controlled motion through a 3D volume, not a plane.
 
-- You can stream **smooth task-space trajectories** to RoArm-M3 using the vendor’s IK.
-- You understand T=104 (blocking move) vs T=1041 (streamed points).
-- You created **reusable gripper utilities** with safety limits.
-- You have a good interview story:
+Emphasizes smooth vertical modulation alongside planar motion.
 
-  “I implemented circle/line trajectory streaming and safe gripper control on a 6-DOF arm over UART using JSON T-codes.”
+What this demonstrates:
+
+True 3D task-space thinking.
+
+Coordinated multi-axis motion under streaming control.
+
+Trajectory generation suitable for operations like insertion, scanning, or surface following.
+
+Run:
+
+bash
+Copy code
+python3 lessons/01_trajectory_and_gripper/demo_spiral.py
+Gripper Control & Safety Utilities
+Lesson 01 also establishes safe, reusable gripper control, which all later lessons depend on.
+
+High-Level Gripper Interface
+Script:
+lessons/01_trajectory_and_gripper/roarm_gripper.py
+
+Provides a small Python abstraction for gripper control:
+
+Maps intuitive “open / close” intent to servo angle commands.
+
+Enforces hard safety limits to prevent stalling or buzzing.
+
+Designed to be imported by all motion scripts.
+
+Example usage:
+
+python
+Copy code
+from lessons.01_trajectory_and_gripper.roarm_gripper import set_gripper
+
+set_gripper(ser, angle_rad=2.8)  # nearly closed, within safe range
+Gripper Characterization Utility
+Script:
+lessons/01_trajectory_and_gripper/gripper_sweep.py
+
+This utility was used to empirically determine safe operating limits.
+
+It:
+
+Sweeps the gripper through a range of angles.
+
+Allows visual confirmation of:
+
+Fully open
+
+Light pinch
+
+Near-stall regions
+
+Informs the safety limits enforced by roarm_gripper.py.
+
+Run:
+
+bash
+Copy code
+python3 lessons/01_trajectory_and_gripper/gripper_sweep.py
+Safety note:
+Keep fingers clear. Stop immediately if the gripper stalls or audibly buzzes.
+
+Lesson 01 Takeaways
+After completing Lesson 01:
+
+You can command a real 6-DOF robot arm directly in Cartesian space.
+
+You understand blocking vs streamed motion (T=104 vs T=1041).
+
+You can generate continuous, real-time trajectories from Python.
+
+You account for motion quality, not just endpoint accuracy.
+
+You enforce explicit safety limits when controlling hardware.
+
+Portfolio / interview summary:
+
+“I implemented real-time Cartesian trajectory streaming (parametric and volumetric paths) with safe gripper control on a 6-DOF robot arm, using firmware-level inverse kinematics and streamed motion commands over UART.”
+
+Lesson 01 is the control foundation for all subsequent work:
+vision, calibration, tracking, and autonomous manipulation.

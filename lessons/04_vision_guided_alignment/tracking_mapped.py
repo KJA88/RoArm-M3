@@ -35,11 +35,31 @@ X_MIN, X_MAX = 150.0, 350.0
 Y_MIN, Y_MAX = -150.0, 150.0
 
 # -------------------------------
-# PATHS (YOUR FILES)
+# PATHS
 # -------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-HSV_PATH = PROJECT_ROOT / "lessons/03_vision_color_detection/profiles/green_triangle.json"
-H_PATH   = PROJECT_ROOT / "lessons/04_vision_guided_alignment/data/homography_matrix_clean.npy"
+PROFILES_DIR = PROJECT_ROOT / "lessons/03_vision_color_detection/profiles"
+H_PATH       = PROJECT_ROOT / "lessons/04_vision_guided_alignment/data/homography_matrix_clean.npy"
+
+# -------------------------------
+# HSV PROFILE SELECTION (NEW)
+# -------------------------------
+def choose_hsv_profile():
+    profiles = sorted(p.name for p in PROFILES_DIR.glob("*.json"))
+
+    if not profiles:
+        print("No HSV profiles found. Run Lesson 03 calibration first.")
+        exit(1)
+
+    print("\nAvailable HSV profiles:")
+    for i, name in enumerate(profiles):
+        print(f"  [{i}] {name}")
+
+    while True:
+        choice = input("Select HSV profile to TRACK: ").strip()
+        if choice.isdigit() and int(choice) < len(profiles):
+            return PROFILES_DIR / profiles[int(choice)]
+        print("Invalid selection. Try again.")
 
 # -------------------------------
 # UART helper
@@ -63,12 +83,16 @@ time.sleep(0.3)
 # -------------------------------
 # LOAD HSV + HOMOGRAPHY
 # -------------------------------
+HSV_PATH = choose_hsv_profile()
+
 with open(HSV_PATH) as f:
     hsv = json.load(f)
 
 HSV_LOWER = np.array(hsv["lower"], np.uint8)
 HSV_UPPER = np.array(hsv["upper"], np.uint8)
 MIN_AREA  = hsv.get("min_area", 300)
+
+print(f"\nTracking HSV profile: {HSV_PATH.name}")
 
 H = np.load(H_PATH)
 
@@ -128,7 +152,6 @@ def main():
             x = max(X_MIN, min(X_MAX, x))
             y = max(Y_MIN, min(Y_MAX, y))
 
-            # EXACT SAME STRUCTURE AS CIRCLE DEMO
             send(ser, {
                 "T": 1041,
                 "x": x,

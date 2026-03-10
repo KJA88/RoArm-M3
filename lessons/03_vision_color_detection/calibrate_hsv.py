@@ -38,7 +38,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILES_DIR = os.path.join(SCRIPT_DIR, "profiles")
 os.makedirs(PROFILES_DIR, exist_ok=True)
 
-IMG_PATH = os.path.join(SCRIPT_DIR, "frame_with_square.jpg")
+IMG_PATH = os.path.join(SCRIPT_DIR, "calibrate_hsv.jpg")
+
 
 # ================= USER INPUT =================
 print("\nHSV CALIBRATION TOOL")

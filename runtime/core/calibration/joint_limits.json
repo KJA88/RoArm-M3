@@ -1,0 +1,26 @@
+{
+  "2": {
+    "name": "Shoulder",
+    "negative_limit": -1.3,
+    "positive_limit": 1.1,
+    "units": "radians",
+    "verified_by": "human",
+    "milestone": "02_mechanical_truth"
+  },
+  "3": {
+    "name": "Elbow",
+    "negative_limit": -0.366,
+    "positive_limit": 2.734,
+    "units": "radians",
+    "verified_by": "human",
+    "milestone": "02_mechanical_truth"
+  },
+  "4": {
+    "name": "Wrist",
+    "negative_limit": -1.0,
+    "positive_limit": 1.4,
+    "units": "radians",
+    "verified_by": "human",
+    "milestone": "02_mechanical_truth"
+  }
+}

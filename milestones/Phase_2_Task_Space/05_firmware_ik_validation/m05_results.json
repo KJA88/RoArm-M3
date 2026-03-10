@@ -1,0 +1,32 @@
+[
+    {
+        "target": {
+            "name": "HOME_CANDLE",
+            "x": 48,
+            "y": 0,
+            "z": 550,
+            "p": -1.57
+        },
+        "hardware_reply": null
+    },
+    {
+        "target": {
+            "name": "FORWARD_REACH",
+            "x": 200,
+            "y": 0,
+            "z": 300,
+            "p": -1.57
+        },
+        "hardware_reply": null
+    },
+    {
+        "target": {
+            "name": "LATERAL_NUDGE",
+            "x": 200,
+            "y": 50,
+            "z": 300,
+            "p": -1.57
+        },
+        "hardware_reply": null
+    }
+]

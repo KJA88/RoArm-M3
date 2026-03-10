@@ -1,0 +1,15 @@
+{
+  "gripper": {
+    "units": "radians",
+    "safe_min": 1.6,
+    "safe_max": 2.8,
+    "presets": {
+      "open": 1.6,
+      "light": 2.0,
+      "firm": 2.4,
+      "pinch": 2.8
+    },
+    "verified_by": "human",
+    "milestone": "02_mechanical_truth"
+  }
+}
