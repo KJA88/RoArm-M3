@@ -65,9 +65,9 @@ CANDLE_SCRIPT = (
     / "lessons/01_trajectory_and_gripper/demo_candle.py"
 )
 
-CANDLE_AUTH_FILE = RUNTIME_DIR / "candle_authority.json"
 
 RUNTIME_DIR = Path("/home/KA_PI/roarm-mcp/runtime")
+CANDLE_AUTH_FILE = RUNTIME_DIR / "candle_authority.json"
 AUTH_FILE = RUNTIME_DIR / "lissajous_authority.json"
 LOCK_FILE = RUNTIME_DIR / "motion.lock"
 AUDIT_LOG = RUNTIME_DIR / "motion_audit.jsonl"
