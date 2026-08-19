@@ -66,7 +66,7 @@ CANDLE_SCRIPT = (
 )
 
 
-RUNTIME_DIR = Path("/home/KA_PI/roarm-mcp/runtime")
+RUNTIME_DIR = Path("/home/KA_PI/robotics/roarm-m3/mcp/runtime")
 CANDLE_AUTH_FILE = RUNTIME_DIR / "candle_authority.json"
 AUTH_FILE = RUNTIME_DIR / "lissajous_authority.json"
 LOCK_FILE = RUNTIME_DIR / "motion.lock"

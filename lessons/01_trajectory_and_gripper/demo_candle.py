@@ -23,7 +23,13 @@ def main():
     send(ser, {"T": 210, "cmd": 1})
     time.sleep(0.5)
 
-    # Physically verified joint-space Candle pose.
+    # Physically verified joint-space Candle arm pose.
+    #
+    # IMPORTANT:
+    # Gripper/hand is intentionally NOT commanded here.
+    # Named arm poses must not silently open, close, or otherwise
+    # change the gripper. Gripper motion is controlled separately
+    # through the dedicated named-gripper authority.
     send(
         ser,
         {
@@ -33,7 +39,6 @@ def main():
             "elbow": 0,
             "wrist": 0,
             "roll": 0,
-            "hand": 1.0,
             "spd": 0,
             "acc": 0,
         },
@@ -42,7 +47,7 @@ def main():
     time.sleep(2.0)
     ser.close()
 
-    print("Candle pose command completed.")
+    print("Candle arm pose command completed. Gripper unchanged.")
 
 
 if __name__ == "__main__":

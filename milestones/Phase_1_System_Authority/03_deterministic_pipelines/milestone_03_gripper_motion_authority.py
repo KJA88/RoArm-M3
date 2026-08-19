@@ -58,7 +58,7 @@ from milestone_03_state_reader import get_feedback
 
 THIS_FILE = Path(__file__).resolve()
 
-RUNTIME_DIR = Path("/home/KA_PI/roarm-mcp/runtime")
+RUNTIME_DIR = Path("/home/KA_PI/robotics/roarm-m3/mcp/runtime")
 
 AUTH_FILE = RUNTIME_DIR / "gripper_authority.json"
 LOCK_FILE = RUNTIME_DIR / "motion.lock"
