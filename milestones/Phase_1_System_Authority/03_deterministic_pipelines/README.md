@@ -15,3 +15,23 @@ To solve "command spamming" and "hardware amnesia" by enforcing a strict **One C
 ```bash
 cd ~/RoArm
 python3 milestones/Phase_1_System_Authority/03_deterministic_pipelines/milestone_03_run.py
+---
+
+## Current Authority Notice
+
+This directory contains historical Phase 1 read-only work as well as later
+live-motion authority additions.
+
+Do not interpret older `read-only`, `no motion`, or
+`hardware_action: NONE` language as a global permanent prohibition.
+
+Those statements remain authoritative for the specific read-only validator
+and state-reader components in which they appear.
+
+For current live-motion authority, consult:
+
+- `MOTION_AUTHORITY.md`
+- `milestone_03_motion_authority.py`
+- `milestone_03_joint_motion_authority.py`
+
+Current approved live motion is intentionally narrow and gated.
