@@ -59,6 +59,14 @@ LISSAJOUS_SCRIPT = (
     / "lessons/01_trajectory_and_gripper/demo_lissajous.py"
 )
 
+
+CANDLE_SCRIPT = (
+    REPO_ROOT
+    / "lessons/01_trajectory_and_gripper/demo_candle.py"
+)
+
+CANDLE_AUTH_FILE = RUNTIME_DIR / "candle_authority.json"
+
 RUNTIME_DIR = Path("/home/KA_PI/roarm-mcp/runtime")
 AUTH_FILE = RUNTIME_DIR / "lissajous_authority.json"
 LOCK_FILE = RUNTIME_DIR / "motion.lock"
@@ -131,6 +139,49 @@ def arm_lissajous() -> dict:
 
     return permit
 
+
+
+def arm_candle() -> dict:
+    """
+    LOCAL OPERATOR ACTION.
+
+    Creates one short-lived, one-use authorization for the exact
+    fixed Candle routine.
+    """
+
+    if not CANDLE_SCRIPT.is_file():
+        raise FileNotFoundError(
+            f"Approved Candle script not found: {CANDLE_SCRIPT}"
+        )
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
+    digest = _sha256(CANDLE_SCRIPT)
+
+    permit = {
+        "routine": "candle",
+        "timestamp_unix": time.time(),
+        "script": str(CANDLE_SCRIPT),
+        "sha256": digest,
+        "authority": "LOCAL_OPERATOR_ONE_SHOT",
+        "max_age_seconds": AUTH_MAX_AGE_SECONDS,
+    }
+
+    CANDLE_AUTH_FILE.write_text(
+        json.dumps(permit, indent=2),
+        encoding="utf-8",
+    )
+
+    CANDLE_AUTH_FILE.chmod(0o600)
+
+    _audit(
+        "AUTHORIZATION_ARMED",
+        routine="candle",
+        sha256=digest,
+        max_age_seconds=AUTH_MAX_AGE_SECONDS,
+    )
+
+    return permit
 
 def _read_fresh_state() -> dict:
     try:
@@ -386,6 +437,182 @@ def execute_lissajous() -> dict:
             reason=str(exc),
         )
 
+        return {
+            "ok": False,
+            "authorized": True,
+            "error": str(exc),
+            "hardware_action": "MOTION_ATTEMPT_FAILED",
+        }
+
+    finally:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_handle.close()
+
+
+def execute_candle() -> dict:
+    """
+    Execute the approved fixed joint-space Candle routine.
+
+    No user-supplied motion parameters are accepted.
+    """
+
+    if not CANDLE_SCRIPT.is_file():
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "Approved Candle script is missing.",
+            "hardware_action": "NONE",
+        }
+
+    state = _read_fresh_state()
+
+    if not state.get("connected"):
+        _audit(
+            "MOTION_REJECTED",
+            routine="candle",
+            reason="controller_not_connected",
+        )
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "RoArm controller is not connected.",
+            "hardware_action": "NONE",
+        }
+
+    if not state.get("fresh"):
+        _audit(
+            "MOTION_REJECTED",
+            routine="candle",
+            reason="controller_state_not_fresh",
+        )
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "RoArm controller state is not fresh.",
+            "hardware_action": "NONE",
+        }
+
+    try:
+        permit = json.loads(
+            CANDLE_AUTH_FILE.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": (
+                "Local one-shot Candle authorization is not armed. "
+                "Operator must run roarm-arm-candle on the Raspberry Pi."
+            ),
+            "hardware_action": "NONE",
+        }
+
+    try:
+        age = time.time() - float(permit["timestamp_unix"])
+    except Exception:
+        age = AUTH_MAX_AGE_SECONDS + 1
+
+    if (
+        permit.get("routine") != "candle"
+        or age < 0
+        or age > AUTH_MAX_AGE_SECONDS
+    ):
+        CANDLE_AUTH_FILE.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "Local Candle authorization expired or is invalid.",
+            "hardware_action": "NONE",
+        }
+
+    current_hash = _sha256(CANDLE_SCRIPT)
+
+    if permit.get("sha256") != current_hash:
+        CANDLE_AUTH_FILE.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "Candle script changed after local authorization.",
+            "hardware_action": "NONE",
+        }
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    lock_handle = LOCK_FILE.open("w")
+
+    try:
+        fcntl.flock(
+            lock_handle.fileno(),
+            fcntl.LOCK_EX | fcntl.LOCK_NB,
+        )
+    except BlockingIOError:
+        lock_handle.close()
+        return {
+            "ok": False,
+            "authorized": False,
+            "error": "Another RoArm motion routine is already active.",
+            "hardware_action": "NONE",
+        }
+
+    try:
+        # Consume permit BEFORE motion.
+        CANDLE_AUTH_FILE.unlink(missing_ok=True)
+
+        _audit(
+            "MOTION_AUTHORIZATION_CONSUMED",
+            routine="candle",
+            sha256=current_hash,
+        )
+
+        _audit(
+            "MOTION_STARTED",
+            routine="candle",
+            script=str(CANDLE_SCRIPT),
+            sha256=current_hash,
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(CANDLE_SCRIPT)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+        final_state = _read_fresh_state()
+
+        _audit(
+            "MOTION_FINISHED",
+            routine="candle",
+            returncode=result.returncode,
+            sha256=current_hash,
+        )
+
+        return {
+            "ok": result.returncode == 0,
+            "authorized": True,
+            "authorization": "LOCAL_ONE_SHOT_CONSUMED",
+            "routine": "CANDLE_HOME",
+            "script": str(CANDLE_SCRIPT),
+            "verified_script_sha256": current_hash,
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+            "final_state": final_state,
+            "hardware_action": "CANDLE_EXECUTED",
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "authorized": True,
+            "error": "Candle routine timed out.",
+            "hardware_action": "MOTION_PROCESS_TERMINATED",
+        }
+
+    except Exception as exc:
         return {
             "ok": False,
             "authorized": True,
