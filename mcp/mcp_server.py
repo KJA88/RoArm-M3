@@ -56,6 +56,8 @@ from milestone_03_ready_motion_authority import execute_ready
 from milestone_03_observe_left_motion_authority import execute_observe_left
 from milestone_03_observe_center_motion_authority import execute_observe_center
 from milestone_03_observe_right_motion_authority import execute_observe_right
+from milestone_03_scan_left_motion_authority import execute_scan_left
+from milestone_03_scan_right_motion_authority import execute_scan_right
 
 
 security = TransportSecuritySettings(
@@ -335,6 +337,28 @@ def run_lissajous() -> dict:
     """
 
     return execute_lissajous()
+
+
+@mcp.tool()
+def scan_left() -> dict:
+    """
+    Move to Ready, then perform the fixed smooth left camera scan.
+
+    Requires the operator to first run arm_scan_left.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    """
+    return execute_scan_left()
+
+
+@mcp.tool()
+def scan_right() -> dict:
+    """
+    Move to Ready, then perform the fixed smooth right camera scan.
+
+    Requires the operator to first run arm_scan_right.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    """
+    return execute_scan_right()
 
 
 @mcp.tool()
