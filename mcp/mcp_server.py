@@ -51,6 +51,7 @@ from milestone_03_state_aware_validator import (
 from milestone_03_motion_authority import execute_lissajous, execute_candle
 from milestone_03_joint_motion_authority import execute_constrained_joint_move
 from milestone_03_gripper_motion_authority import execute_gripper_position
+from milestone_03_home_motion_authority import execute_home
 
 
 security = TransportSecuritySettings(
@@ -330,6 +331,21 @@ def run_lissajous() -> dict:
     """
 
     return execute_lissajous()
+
+
+@mcp.tool()
+def move_home() -> dict:
+    """
+    Move the RoArm to the manufacturer's fixed INIT/Home position.
+
+    LIVE HARDWARE ACTION.
+
+    Requires the operator to first run arm_home.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+
+    No joint values or arbitrary serial commands are accepted.
+    """
+    return execute_home()
 
 
 @mcp.tool()
