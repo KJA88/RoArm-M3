@@ -52,6 +52,7 @@ from milestone_03_motion_authority import execute_lissajous, execute_candle
 from milestone_03_joint_motion_authority import execute_constrained_joint_move
 from milestone_03_gripper_motion_authority import execute_gripper_position
 from milestone_03_home_motion_authority import execute_home
+from milestone_03_ready_motion_authority import execute_ready
 
 
 security = TransportSecuritySettings(
@@ -331,6 +332,21 @@ def run_lissajous() -> dict:
     """
 
     return execute_lissajous()
+
+
+@mcp.tool()
+def move_ready() -> dict:
+    """
+    Move the RoArm to the fixed human-taught Ready pose.
+
+    LIVE HARDWARE ACTION.
+
+    Requires the operator to first run arm_ready.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+
+    No arbitrary joint values or serial commands are accepted.
+    """
+    return execute_ready()
 
 
 @mcp.tool()
