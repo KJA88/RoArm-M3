@@ -53,6 +53,9 @@ from milestone_03_joint_motion_authority import execute_constrained_joint_move
 from milestone_03_gripper_motion_authority import execute_gripper_position
 from milestone_03_home_motion_authority import execute_home
 from milestone_03_ready_motion_authority import execute_ready
+from milestone_03_observe_left_motion_authority import execute_observe_left
+from milestone_03_observe_center_motion_authority import execute_observe_center
+from milestone_03_observe_right_motion_authority import execute_observe_right
 
 
 security = TransportSecuritySettings(
@@ -332,6 +335,39 @@ def run_lissajous() -> dict:
     """
 
     return execute_lissajous()
+
+
+@mcp.tool()
+def move_observe_center() -> dict:
+    """
+    Move the RoArm to the fixed human-taught Observe Center pose.
+
+    Requires the operator to first run arm_observe_center.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    """
+    return execute_observe_center()
+
+
+@mcp.tool()
+def move_observe_right() -> dict:
+    """
+    Move the RoArm to the fixed human-taught Observe Right pose.
+
+    Requires the operator to first run arm_observe_right.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    """
+    return execute_observe_right()
+
+
+@mcp.tool()
+def move_observe_left() -> dict:
+    """
+    Move the RoArm to the fixed human-taught Observe Left pose.
+
+    Requires the operator to first run arm_observe_left.py locally on the
+    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    """
+    return execute_observe_left()
 
 
 @mcp.tool()
