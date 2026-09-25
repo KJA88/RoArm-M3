@@ -20,10 +20,15 @@ Safety:
 import json
 import os
 import time
+from urllib.parse import urlencode
+from urllib.request import urlopen
+
 import serial
 
 
 BAUD = 115200
+HTTP_TIMEOUT = 1.5
+DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 
 PREFERRED_PORT = (
     "/dev/serial/by-id/"
@@ -48,7 +53,48 @@ def choose_port():
     )
 
 
-def get_feedback():
+def normalize_feedback(feedback, transport, endpoint, **transport_details):
+    """Return one validated firmware packet in the stable state schema."""
+    return {
+        "connected": True,
+        "fresh": True,
+        "transport": transport,
+        "endpoint": endpoint,
+        **transport_details,
+        "timestamp_unix": time.time(),
+
+        "pose": {
+            "x": feedback.get("x"),
+            "y": feedback.get("y"),
+            "z": feedback.get("z"),
+            "tilt": feedback.get("tit"),
+        },
+
+        "joints": {
+            "base": feedback.get("b"),
+            "shoulder": feedback.get("s"),
+            "elbow": feedback.get("e"),
+            "wrist": feedback.get("t"),
+            "roll": feedback.get("r"),
+            "gripper": feedback.get("g"),
+        },
+
+        # Preserve firmware fields whose meanings have not yet
+        # been authoritatively assigned.
+        "additional_feedback": {
+            key: value
+            for key, value in feedback.items()
+            if key not in {
+                "T", "x", "y", "z", "tit",
+                "b", "s", "e", "t", "r", "g"
+            }
+        },
+
+        "raw_feedback": feedback,
+    }
+
+
+def get_serial_feedback():
     """
     Perform one deterministic read-only firmware-state query.
 
@@ -110,47 +156,60 @@ def get_feedback():
                 "No valid T=1051 feedback received within timeout"
             )
 
-        timestamp = time.time()
-
-        return {
-            "connected": True,
-            "fresh": True,
-            "port": port,
-            "baud": BAUD,
-            "timestamp_unix": timestamp,
-
-            "pose": {
-                "x": feedback.get("x"),
-                "y": feedback.get("y"),
-                "z": feedback.get("z"),
-                "tilt": feedback.get("tit"),
-            },
-
-            "joints": {
-                "base": feedback.get("b"),
-                "shoulder": feedback.get("s"),
-                "elbow": feedback.get("e"),
-                "wrist": feedback.get("t"),
-                "roll": feedback.get("r"),
-                "gripper": feedback.get("g"),
-            },
-
-            # Preserve firmware fields whose meanings have not yet
-            # been authoritatively assigned.
-            "additional_feedback": {
-                key: value
-                for key, value in feedback.items()
-                if key not in {
-                    "T", "x", "y", "z", "tit",
-                    "b", "s", "e", "t", "r", "g"
-                }
-            },
-
-            "raw_feedback": feedback,
-        }
+        return normalize_feedback(
+            feedback,
+            transport="serial",
+            endpoint=port,
+            port=port,
+            baud=BAUD,
+        )
 
     finally:
         ser.close()
+
+
+def get_http_feedback():
+    """Perform one read-only T=105 query through the firmware HTTP API."""
+    base_url = os.environ.get(
+        "ROARM_HTTP_BASE_URL",
+        DEFAULT_HTTP_BASE_URL,
+    ).rstrip("/")
+    if not base_url:
+        raise ValueError("ROARM_HTTP_BASE_URL must not be empty")
+
+    query = urlencode({"json": '{"T":105}'})
+    url = f"{base_url}/js?{query}"
+
+    with urlopen(url, timeout=HTTP_TIMEOUT) as response:
+        packet = json.loads(response.read().decode("utf-8"))
+
+    if not isinstance(packet, dict):
+        raise RuntimeError("HTTP feedback must be a JSON object")
+    if packet.get("T") != 1051:
+        raise RuntimeError("HTTP feedback did not contain T=1051")
+
+    return normalize_feedback(
+        packet,
+        transport="http",
+        endpoint=base_url,
+    )
+
+
+def get_feedback():
+    """Use the explicitly selected state transport; serial is the default."""
+    transport = os.environ.get(
+        "ROARM_STATE_TRANSPORT",
+        "serial",
+    ).strip().lower()
+
+    if transport == "serial":
+        return get_serial_feedback()
+    if transport == "http":
+        return get_http_feedback()
+
+    raise ValueError(
+        "ROARM_STATE_TRANSPORT must be 'serial' or 'http'"
+    )
 
 
 def main():
