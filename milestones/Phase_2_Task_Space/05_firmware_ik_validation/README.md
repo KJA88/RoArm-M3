@@ -314,15 +314,27 @@ The T104 template includes spd, with example value 0.25, and does not include ac
 
 docs/01_REFERENCE_EXTERNAL/command_cheatsheet.md section 7 shows one T102 example with spd 0 and acc 0. It does not define those fields.
 
-Current production packets:
+Current official Waveshare sources, checked against those stored copies:
 
-READY T102 uses spd 0 and acc 0. Those values match the cheatsheet example. They are outside the only numeric ranges documented by the manufacturer joint API, and this repository does not document what zero means.
+JSON behavior is documented on https://www.waveshare.com/wiki/RoArm-M3-S_Robotic_Arm_Control, page revision oldid 109477.
 
-Named T104 uses spd 0.5. That value is inherited from milestone_04_supervisor.py and milestone_05_reachability.py. The manufacturer pose_ctrl section does not document it. The internal T104 note does not define its unit or say that a lower value is gentler.
+T101 and T102 spd is steps/s. One servo revolution is 4096 steps. A higher spd is faster. The spd bullet says that when the acceleration speed value is 0, motion uses maximum speed. The product overview at https://www.waveshare.com/wiki/RoArm-M3 states the same zero case more directly for a joint command: speed value 0 rotates at maximum speed.
 
-Demonstrated base-scan T101 uses spd 200 and acc 10. Those numbers lie inside the manufacturer joint ranges [1, 4096] and [1, 254]. The stored files do not say that this scan packet was selected from those ranges, and they do not define its motion as slower or gentler.
+T101 and T102 acc is the acceleration at the start and end. A lower value is a smoother start and stop. The documented range is 0-254, and the unit is 100 steps/s^2. acc 10 therefore means 1000 steps/s^2. acc 0 runs at maximum acceleration.
 
-No stored manufacturer section documents a supported T104 acceleration field. No stored section documents that lowering spd or acc reduces post-stop rocking.
+T104 is CMD_XYZT_GOAL_CTRL. Its example is spd 0.25. A larger spd is faster. The command has curve speed control, so speed is not constant. The page documents no acc field. The command blocks. T1041 is the direct command: no spd, no acc, no interpolation, and the arm moves to the target at the fastest speed.
+
+The current SDK source, https://github.com/waveshareteam/waveshare_roarm_sdk at tree d9893632aa7f5a9cb283136ab024faf3143ea7db, passes T101 and T102 spd and acc through unchanged in roarm_sdk/common.py. Its pose_ctrl emits T1041 with x, y, z, t, r, and g only. It does not emit T104 and does not send a task-space spd or acc. The SDK markdown still says joint speed is [1, 4096] and acceleration is [1, 254]. That range omits the wiki's explicit zero-means-maximum behavior, and it describes acceleration as step/s^2 rather than 100 steps/s^2. The SDK angle-command conversion divides acceleration by 254*100, which matches the wiki's factor of 100 even though the markdown does not say so.
+
+Current production packets under that official JSON behavior:
+
+READY T102 spd 0 and acc 0 are maximum speed and maximum acceleration. They are not gentle values. They match the stored cheatsheet example, not a slow setting.
+
+Named T104 spd 0.5 is faster than the wiki example 0.25. T104 has no documented acceleration field, so it cannot be softened with acc. A smaller documented spd is the supported way to make that command slower.
+
+Demonstrated base-scan T101 spd 200 and acc 10 are finite, non-maximum values. acc 10 is 1000 steps/s^2. The wiki says a lower non-zero acc is smoother, while acc 0 is maximum acceleration.
+
+The documented way to reduce joint start/stop harshness is a non-zero spd below the maximum and a low non-zero acc. Zero is not that setting. T104 can be slowed only through its spd coefficient. No official page says that this removes post-stop mechanical rocking. These facts are recorded only; the packets are unchanged.
 
 Definition of Done (Acceptance Criteria)
 
