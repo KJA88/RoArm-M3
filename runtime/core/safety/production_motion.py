@@ -9,6 +9,7 @@ from .existing_motions import (
     SCAN_LEFT_BASE_TARGET,
     SCAN_RIGHT_BASE_TARGET,
 )
+from .gripper_policy import resolve_gripper_preset
 from .motion_authority import LocalMotionAuthority, MotionNotAuthorized
 from .motion_permit import evaluate_motion_permit
 from runtime.core.supervisor.mechanical_supervisor import MechanicalSupervisor
@@ -275,6 +276,89 @@ class ProductionMotionAdapter:
     def execute_named_pose(self, name, targets):
         return self.execute_arm_pose(name, targets)
 
+    def execute_gripper_preset(self, preset):
+        action = "set_gripper"
+        try:
+            target = resolve_gripper_preset(
+                preset, self.authority.gripper_map_path
+            )
+        except ValueError as exc:
+            return _denied(action, str(exc), requested_preset=preset)
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            return _denied(
+                action,
+                "GRIPPER_MAP_UNREADABLE",
+                requested_preset=preset,
+            )
+
+        current_state, denied = self._state(action)
+        if denied:
+            return denied
+        if not _has_finite_joints(current_state, ALL_STATE_JOINTS):
+            return _denied(action, "PRESERVATION_STATE_INVALID")
+        try:
+            permit = self.authority.issue_gripper_permit(
+                current_state=current_state,
+                target=target,
+            )
+        except MotionNotAuthorized as exc:
+            return _denied(
+                action,
+                exc.reason,
+                requested_preset=preset,
+                target=target,
+                checks=exc.checks,
+            )
+
+        transport = None
+        try:
+            transport = self.transport_factory()
+            supervisor = MechanicalSupervisor(
+                transport=transport,
+                authority=self.authority,
+            )
+            response = supervisor.move_gripper_preset(
+                target,
+                permit=permit,
+                current_state=current_state,
+            )
+            return {
+                "ok": True,
+                "authorized": True,
+                "action": action,
+                "preset": preset,
+                "target": target,
+                "permit_id": permit.permit_id,
+                "permit_consumed": permit.consumed,
+                "response": response,
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
+            }
+        except Exception as exc:
+            if permit.consumed:
+                return _uncertain(
+                    action,
+                    preset=preset,
+                    target=target,
+                    permit_id=permit.permit_id,
+                    permit_consumed=True,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            return _denied(
+                action,
+                "EXECUTION_FAILED",
+                requested_preset=preset,
+                target=target,
+                permit_id=permit.permit_id,
+                permit_consumed=False,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+        finally:
+            if transport is not None:
+                transport.close()
+
     def execute_scan(self, name, ready_targets, endpoint):
         expected_endpoint = SCAN_ENDPOINTS.get(name)
         if (
@@ -524,6 +608,10 @@ def execute_scan(name, ready_targets, endpoint):
     return _DEFAULT_ADAPTER.execute_scan(name, ready_targets, endpoint)
 
 
+def execute_gripper_position(preset):
+    return _DEFAULT_ADAPTER.execute_gripper_preset(preset)
+
+
 def deny_unsupported(action, **details):
     return _DEFAULT_ADAPTER.unsupported(action, **details)
 
@@ -536,6 +624,7 @@ __all__ = [
     "ProductionMotionAdapter",
     "deny_unsupported",
     "execute_joint",
+    "execute_gripper_position",
     "execute_named_pose",
     "execute_named_sequence",
     "execute_scan",

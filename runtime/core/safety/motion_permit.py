@@ -7,6 +7,11 @@ from pathlib import Path
 import time
 from typing import Optional
 
+from .gripper_policy import (
+    DEFAULT_GRIPPER_MAP_PATH,
+    load_verified_gripper_presets,
+)
+
 
 DEFAULT_LIMITS_PATH = (
     Path(__file__).resolve().parents[1] / "calibration" / "joint_limits.json"
@@ -200,11 +205,80 @@ def evaluate_motion_permit(
     return _result("PERMIT_OK", checks)
 
 
+def evaluate_gripper_motion_permit(
+    *,
+    current_state,
+    target,
+    guardian_state=None,
+    gripper_map_path=None,
+    now=None,
+    max_state_age_s=2.0,
+):
+    """Authorize only an exact target from the human-verified preset map."""
+    checks = {"guardian_required": False}
+
+    def deny(reason):
+        return _result(reason, checks)
+
+    if not isinstance(current_state, dict):
+        return deny("STATE_MISSING")
+    checks["state_present"] = True
+    if current_state.get("connected") is not True:
+        return deny("STATE_DISCONNECTED")
+    checks["connected"] = True
+    if current_state.get("fresh") is not True:
+        return deny("STATE_NOT_FRESH")
+    checks["fresh"] = True
+
+    state_time = current_state.get("timestamp_unix")
+    if state_time is None:
+        state_time = current_state.get("observed_at")
+    try:
+        state_timestamp = _timestamp(state_time)
+        current_timestamp = _timestamp(time.time() if now is None else now)
+    except (TypeError, ValueError, OverflowError):
+        return deny("STATE_TIMESTAMP_INVALID")
+    if state_timestamp > current_timestamp:
+        return deny("STATE_TIMESTAMP_INVALID")
+    checks["timestamp_valid"] = True
+    if not _is_finite_number(max_state_age_s) or max_state_age_s < 0:
+        return deny("TARGET_INVALID")
+    checks["state_age_s"] = current_timestamp - state_timestamp
+    if checks["state_age_s"] > float(max_state_age_s):
+        return deny("STATE_STALE")
+    checks["state_age_valid"] = True
+
+    if (
+        not isinstance(target, dict)
+        or set(target) != {"joint", "target"}
+        or target.get("joint") != "gripper"
+        or not _is_finite_number(target.get("target"))
+    ):
+        return deny("GRIPPER_PRESET_INVALID")
+    checks["target_valid"] = True
+    try:
+        presets = load_verified_gripper_presets(
+            DEFAULT_GRIPPER_MAP_PATH
+            if gripper_map_path is None
+            else gripper_map_path
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return deny("GRIPPER_MAP_UNREADABLE")
+    checks["verified_presets"] = presets
+    if float(target["target"]) not in set(presets.values()):
+        return deny("GRIPPER_PRESET_NOT_AUTHORIZED")
+    checks["target_is_verified_preset"] = True
+    if guardian_state is not None:
+        checks["guardian_ignored"] = True
+    return _result("PERMIT_OK", checks)
+
+
 __all__ = [
     "BASE_OPERATIONAL_MAX",
     "BASE_OPERATIONAL_MIN",
     "DEFAULT_LIMITS_PATH",
     "MotionPermit",
+    "evaluate_gripper_motion_permit",
     "evaluate_motion_permit",
     "_stamp",
     "_timestamp",

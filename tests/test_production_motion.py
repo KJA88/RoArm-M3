@@ -114,6 +114,11 @@ class FakeTransport:
         self.commands.append(packet)
         return {"T": 102}
 
+    def move_gripper_preset(self, target, *, current_joints):
+        packet = full_t102({"gripper": target})
+        self.commands.append(packet)
+        return {"T": 102}
+
     def move_base_scan(self, target):
         packet = {
             "T": 101,
@@ -277,6 +282,10 @@ class HttpTransportTests(unittest.TestCase):
             roll=state["joints"]["roll"],
             hand=state["joints"]["gripper"],
         )
+        transport.move_gripper_preset(
+            2.0,
+            current_joints=state["joints"],
+        )
         transport.move_base_scan(1.610679827)
         transport.close()
 
@@ -308,6 +317,17 @@ class HttpTransportTests(unittest.TestCase):
                     "acc": 0,
                 },
                 {
+                    "T": 102,
+                    "base": 0.25,
+                    "shoulder": 0.0,
+                    "elbow": 1.0,
+                    "wrist": 0.0,
+                    "roll": -0.004601942,
+                    "hand": 2.0,
+                    "spd": 0,
+                    "acc": 0,
+                },
+                {
                     "T": 101,
                     "joint": 1,
                     "rad": 1.610679827,
@@ -322,7 +342,7 @@ class HttpTransportTests(unittest.TestCase):
         )
         self.assertEqual(
             [request[2] for request in http.requests],
-            [5.0, 5.0, 5.0, 5.0],
+            [5.0, 5.0, 5.0, 5.0, 5.0],
         )
         self.assertEqual(state["joints"]["base"], 0.25)
         self.assertEqual(state["transport"], "http")
@@ -353,6 +373,7 @@ class HttpTransportTests(unittest.TestCase):
                 "close",
                 "move_arm_pose",
                 "move_base_scan",
+                "move_gripper_preset",
                 "move_joint",
                 "read_state",
             },
@@ -410,6 +431,18 @@ class HttpTransportTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_gripper_transport_rejects_nonpreset_targets_without_http(self):
+        http = FakeHttpSession()
+        transport = RoArmProductionHttpTransport(session=http)
+        for target in (1.2, 1.7, 3.0, 3.2, math.nan, math.inf):
+            with self.subTest(target=target):
+                with self.assertRaises(RoArmHttpError):
+                    transport.move_gripper_preset(
+                        target,
+                        current_joints=fresh_state()["joints"],
+                    )
+        self.assertEqual(http.requests, [])
 
 
 class ProductionAdapterTests(unittest.TestCase):
@@ -598,6 +631,128 @@ class ProductionAdapterTests(unittest.TestCase):
                 self.assertEqual(result["reason"], reason)
                 self.assertEqual(result["hardware_action"], "NONE")
                 factory.assert_not_called()
+
+    def test_named_gripper_presets_use_one_full_preserving_t102(self):
+        presets = {
+            "open": 1.6,
+            "light": 2.0,
+            "firm": 2.4,
+            "pinch": 2.8,
+        }
+        current = fresh_state()
+        self.assertGreater(current["joints"]["gripper"], 2.8)
+        for preset, target in presets.items():
+            with self.subTest(preset=preset):
+                transport = FakeTransport()
+                result = self.adapter(
+                    current, lambda: transport
+                ).execute_gripper_preset(preset)
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["preset"], preset)
+                self.assertEqual(result["target"], target)
+                self.assertTrue(result["permit_consumed"])
+                self.assertFalse(result["position_verified"])
+                self.assertEqual(
+                    transport.commands,
+                    [full_t102({"gripper": target})],
+                )
+                packet = transport.commands[0]
+                for joint in ("base", "shoulder", "elbow", "wrist", "roll"):
+                    self.assertEqual(packet[joint], current["joints"][joint])
+                self.assertEqual(packet["hand"], target)
+
+    def test_gripper_rejects_raw_numeric_unknown_and_generic_joint_paths(self):
+        factory = Mock(side_effect=AssertionError("transport must stay closed"))
+        adapter = self.adapter(fresh_state(), factory)
+        for preset, reason in (
+            (2.0, "GRIPPER_PRESET_INVALID"),
+            ("unknown", "GRIPPER_PRESET_NOT_AUTHORIZED"),
+            ("3.0", "GRIPPER_PRESET_NOT_AUTHORIZED"),
+        ):
+            with self.subTest(preset=preset):
+                result = adapter.execute_gripper_preset(preset)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["reason"], reason)
+                self.assertEqual(result["hardware_action"], "NONE")
+
+        generic = adapter.execute_joint("gripper", 2.0)
+        self.assertFalse(generic["ok"])
+        self.assertEqual(generic["reason"], "LIMIT_UNVERIFIED")
+        factory.assert_not_called()
+
+    def test_gripper_stale_or_malformed_state_fails_closed(self):
+        malformed = fresh_state()
+        malformed["joints"] = dict(malformed["joints"])
+        malformed["joints"].pop("roll")
+        for state, reason in (
+            (
+                fresh_state(timestamp_unix=time.time() - 10),
+                "STATE_STALE",
+            ),
+            (malformed, "PRESERVATION_STATE_INVALID"),
+        ):
+            with self.subTest(reason=reason):
+                factory = Mock(
+                    side_effect=AssertionError("transport must stay closed")
+                )
+                result = self.adapter(
+                    state, factory
+                ).execute_gripper_preset("open")
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["reason"], reason)
+                self.assertEqual(result["hardware_action"], "NONE")
+                factory.assert_not_called()
+
+    def test_gripper_timeout_after_consumption_is_uncertain_and_not_retried(self):
+        transport = Mock()
+        transport.move_gripper_preset.side_effect = requests.Timeout(
+            "simulated gripper timeout"
+        )
+        state = fresh_state()
+        result = self.adapter(
+            state, lambda: transport
+        ).execute_gripper_preset("firm")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["authorized"])
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertEqual(result["hardware_action"], "T102_OUTCOME_UNCERTAIN")
+        self.assertTrue(result["permit_consumed"])
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(result["error"], "simulated gripper timeout")
+        transport.move_gripper_preset.assert_called_once_with(
+            2.4,
+            current_joints=state["joints"],
+        )
+        transport.close.assert_called_once_with()
+
+    def test_gripper_permit_is_one_shot(self):
+        state = fresh_state()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        authority = LocalMotionAuthority(
+            audit_path=Path(self.temp.name) / "audit.jsonl"
+        )
+        permit = authority.issue_gripper_permit(
+            current_state=state,
+            target=1.6,
+        )
+
+        first = authority.authorize_gripper_once(
+            permit=permit,
+            target=1.6,
+            current_state=state,
+        )
+        second = authority.authorize_gripper_once(
+            permit=permit,
+            target=1.6,
+            current_state=state,
+        )
+
+        self.assertTrue(first["allowed"])
+        self.assertEqual(second["reason"], "PERMIT_CONSUMED")
+        self.assertTrue(permit.consumed)
 
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
@@ -862,9 +1017,9 @@ class DelegationTests(unittest.TestCase):
         gripper = self.load_wrapper(
             "milestone_03_gripper_motion_authority.py"
         )
-        gripper.inspect_gripper = Mock(return_value={"ok": False})
+        gripper._execute = Mock(return_value={"ok": False})
         gripper.execute_gripper_position("open")
-        gripper.inspect_gripper.assert_called_once_with("open")
+        gripper._execute.assert_called_once_with("open")
 
     def test_daily_cli_delegates(self):
         module = load_file(

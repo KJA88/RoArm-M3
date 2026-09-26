@@ -10,6 +10,7 @@ DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 HTTP_TIMEOUT_S = 5.0
 PRODUCTION_JOINTS = {"base", "shoulder", "elbow", "wrist"}
 SCAN_BASE_ENDPOINTS = {1.610679827, -1.578466231}
+VERIFIED_GRIPPER_PRESET_TARGETS = {1.6, 2.0, 2.4, 2.8}
 ALL_STATE_JOINTS = {
     "base", "shoulder", "elbow", "wrist", "roll", "gripper"
 }
@@ -122,6 +123,39 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             "acc": 0,
         }
         return self._get(packet)
+
+    def move_gripper_preset(self, target, *, current_joints):
+        if (
+            not isinstance(target, (int, float))
+            or isinstance(target, bool)
+            or not math.isfinite(target)
+            or float(target) not in VERIFIED_GRIPPER_PRESET_TARGETS
+        ):
+            raise RoArmHttpError("GRIPPER_PRESET_NOT_AUTHORIZED")
+        if (
+            not isinstance(current_joints, dict)
+            or set(current_joints) != ALL_STATE_JOINTS
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                for value in current_joints.values()
+            )
+        ):
+            raise RoArmHttpError("PRESERVATION_STATE_INVALID")
+        return self._get(
+            {
+                "T": 102,
+                "base": float(current_joints["base"]),
+                "shoulder": float(current_joints["shoulder"]),
+                "elbow": float(current_joints["elbow"]),
+                "wrist": float(current_joints["wrist"]),
+                "roll": float(current_joints["roll"]),
+                "hand": float(target),
+                "spd": 0,
+                "acc": 0,
+            }
+        )
 
     def move_base_scan(self, target):
         if (

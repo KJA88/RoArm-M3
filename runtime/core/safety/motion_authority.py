@@ -10,8 +10,10 @@ from .motion_permit import (
     MotionPermit,
     _stamp,
     _timestamp,
+    evaluate_gripper_motion_permit,
     evaluate_motion_permit,
 )
+from .gripper_policy import DEFAULT_GRIPPER_MAP_PATH
 
 
 def _result(reason, checks):
@@ -28,7 +30,14 @@ class MotionNotAuthorized(RuntimeError):
 class LocalMotionAuthority:
     """Issue permits that are valid only within this local authority instance."""
 
-    def __init__(self, *, limits_path=None, audit_path=None, permit_ttl_s=5.0):
+    def __init__(
+        self,
+        *,
+        limits_path=None,
+        gripper_map_path=None,
+        audit_path=None,
+        permit_ttl_s=5.0,
+    ):
         if (
             not isinstance(permit_ttl_s, (int, float))
             or isinstance(permit_ttl_s, bool)
@@ -38,6 +47,11 @@ class LocalMotionAuthority:
             raise ValueError("permit_ttl_s must be a positive finite number")
         self.limits_path = (
             DEFAULT_LIMITS_PATH if limits_path is None else limits_path
+        )
+        self.gripper_map_path = (
+            DEFAULT_GRIPPER_MAP_PATH
+            if gripper_map_path is None
+            else gripper_map_path
         )
         self.permit_ttl_s = float(permit_ttl_s)
         self.audit = MotionAuditLog(audit_path)
@@ -94,6 +108,48 @@ class LocalMotionAuthority:
         self.audit.record("permit_issued", **permit.public_dict())
         return permit
 
+    def issue_gripper_permit(
+        self,
+        *,
+        current_state,
+        target,
+        guardian_state=None,
+        now=None,
+        max_state_age_s=2.0,
+    ):
+        decision = evaluate_gripper_motion_permit(
+            current_state=current_state,
+            target={"joint": "gripper", "target": target},
+            guardian_state=guardian_state,
+            gripper_map_path=self.gripper_map_path,
+            now=now,
+            max_state_age_s=max_state_age_s,
+        )
+        if not decision["allowed"]:
+            self.audit.record(
+                "permit_rejected",
+                reason=decision["reason"],
+                requested_action="move_gripper_preset",
+                requested_joint="gripper",
+                requested_target=target,
+            )
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+
+        issued_timestamp = _timestamp(time.time() if now is None else now)
+        permit = MotionPermit(
+            permit_id=str(uuid4()),
+            issued_at=_stamp(issued_timestamp),
+            expires_at=_stamp(issued_timestamp + self.permit_ttl_s),
+            allowed_action="move_gripper_preset",
+            allowed_joint="gripper",
+            allowed_target=float(target),
+            max_delta=None,
+            consumed=False,
+            _authority_id=self._authority_id,
+        )
+        self.audit.record("permit_issued", **permit.public_dict())
+        return permit
+
     def authorize_once(
         self,
         *,
@@ -133,6 +189,49 @@ class LocalMotionAuthority:
             reason=decision["reason"],
             requested_action=action,
             requested_joint=joint,
+            requested_target=target,
+        )
+        return decision
+
+    def authorize_gripper_once(
+        self,
+        *,
+        permit,
+        target,
+        current_state,
+        guardian_state=None,
+        now=None,
+        max_state_age_s=2.0,
+    ):
+        action = "move_gripper_preset"
+        self.audit.record(
+            "move_requested",
+            permit_id=getattr(permit, "permit_id", None),
+            requested_action=action,
+            requested_joint="gripper",
+            requested_target=target,
+        )
+        with self._lock:
+            decision = self._validate_permit(
+                permit=permit,
+                action=action,
+                joint="gripper",
+                target=target,
+                current_state=current_state,
+                guardian_state=guardian_state,
+                now=now,
+                max_state_age_s=max_state_age_s,
+                safety_evaluator=evaluate_gripper_motion_permit,
+                safety_options={"gripper_map_path": self.gripper_map_path},
+            )
+            if decision["allowed"]:
+                permit.consumed = True
+        self.audit.record(
+            "permit_accepted" if decision["allowed"] else "permit_rejected",
+            permit_id=getattr(permit, "permit_id", None),
+            reason=decision["reason"],
+            requested_action=action,
+            requested_joint="gripper",
             requested_target=target,
         )
         return decision
@@ -217,6 +316,8 @@ class LocalMotionAuthority:
         guardian_state,
         now,
         max_state_age_s,
+        safety_evaluator=evaluate_motion_permit,
+        safety_options=None,
     ):
         checks = {
             "permit_present": isinstance(permit, MotionPermit),
@@ -260,13 +361,18 @@ class LocalMotionAuthority:
         requested = {"joint": joint, "target": target}
         if permit.max_delta is not None:
             requested["max_delta"] = permit.max_delta
-        safety = evaluate_motion_permit(
+        options = (
+            {"limits_path": self.limits_path}
+            if safety_options is None
+            else safety_options
+        )
+        safety = safety_evaluator(
             current_state=current_state,
             target=requested,
             guardian_state=guardian_state,
-            limits_path=self.limits_path,
             now=current_timestamp,
             max_state_age_s=max_state_age_s,
+            **options,
         )
         checks["motion_safety"] = safety["checks"]
         if not safety["allowed"]:

@@ -156,6 +156,47 @@ class MechanicalSupervisor:
             self.authority.record_move_result(permit, succeeded=True)
         return response
 
+    def move_gripper_preset(
+        self,
+        target,
+        *,
+        permit,
+        current_state,
+        guardian_state=None,
+        now=None,
+    ):
+        """Command one verified gripper preset while preserving every other joint."""
+        current_joints = _finite_joint_state(current_state, ALL_STATE_JOINTS)
+        decision = self.authority.authorize_gripper_once(
+            permit=permit,
+            target=target,
+            current_state=current_state,
+            guardian_state=guardian_state,
+            now=now,
+        )
+        if not decision["allowed"]:
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+        if self._transport is None:
+            error = RuntimeError("No local motion transport is configured")
+            self.authority.record_move_result(
+                permit, succeeded=False, error=error
+            )
+            raise error
+
+        self.authority.record_move_start(permit)
+        try:
+            response = self._transport.move_gripper_preset(
+                float(target),
+                current_joints=current_joints,
+            )
+        except Exception as exc:
+            self.authority.record_move_result(
+                permit, succeeded=False, error=exc
+            )
+            raise
+        self.authority.record_move_result(permit, succeeded=True)
+        return response
+
     def move_base_scan(
         self,
         target,

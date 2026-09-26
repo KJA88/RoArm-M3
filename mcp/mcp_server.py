@@ -424,8 +424,8 @@ def set_gripper(position: str) -> dict:
 
     Arbitrary numeric gripper targets are not accepted.
 
-    The existing human-verified calibration map is reported, but execution
-    remains denied pending explicit integration into the safety policy.
+    Each name routes through the local one-shot authority using the
+    human-verified Milestone 02 calibration map.
     """
 
     return execute_gripper_position(position)
