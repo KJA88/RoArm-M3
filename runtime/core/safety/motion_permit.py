@@ -12,9 +12,13 @@ DEFAULT_LIMITS_PATH = (
     Path(__file__).resolve().parents[1] / "calibration" / "joint_limits.json"
 )
 
+BASE_OPERATIONAL_MIN = -1.57
+BASE_OPERATIONAL_MAX = 1.60
 VERIFIED_JOINT_IDS = {"shoulder": "2", "elbow": "3", "wrist": "4"}
-KNOWN_UNVERIFIED_JOINTS = {"base", "roll", "gripper"}
-KNOWN_JOINTS = set(VERIFIED_JOINT_IDS) | KNOWN_UNVERIFIED_JOINTS
+KNOWN_UNVERIFIED_JOINTS = {"roll", "gripper"}
+KNOWN_JOINTS = (
+    set(VERIFIED_JOINT_IDS) | KNOWN_UNVERIFIED_JOINTS | {"base"}
+)
 
 
 @dataclass
@@ -136,36 +140,48 @@ def evaluate_motion_permit(
     if joint in KNOWN_UNVERIFIED_JOINTS:
         return deny("LIMIT_UNVERIFIED")
 
-    try:
-        path = DEFAULT_LIMITS_PATH if limits_path is None else limits_path
-        limits = _load_limits(path)
-    except (OSError, ValueError, TypeError):
-        return deny("LIMITS_UNREADABLE")
+    if joint == "base":
+        minimum = BASE_OPERATIONAL_MIN
+        maximum = BASE_OPERATIONAL_MAX
+        checks["verified_operational_bounds"] = {
+            "joint_id": 1,
+            "min": minimum,
+            "max": maximum,
+            "kind": "operational_not_mechanical",
+        }
+    else:
+        try:
+            path = DEFAULT_LIMITS_PATH if limits_path is None else limits_path
+            limits = _load_limits(path)
+        except (OSError, ValueError, TypeError):
+            return deny("LIMITS_UNREADABLE")
 
-    entry = limits.get(VERIFIED_JOINT_IDS[joint])
-    if not isinstance(entry, dict):
-        return deny("LIMIT_UNVERIFIED")
-    minimum = entry.get("negative_limit")
-    maximum = entry.get("positive_limit")
-    if not (
-        str(entry.get("name", "")).lower() == joint
-        and entry.get("units") == "radians"
-        and bool(entry.get("verified_by"))
-        and _is_finite_number(minimum)
-        and _is_finite_number(maximum)
-        and minimum <= maximum
-    ):
-        return deny("LIMIT_UNVERIFIED")
-    checks["limit_verified"] = True
-    checks["verified_limit"] = {
-        "joint_id": int(VERIFIED_JOINT_IDS[joint]),
-        "min": float(minimum),
-        "max": float(maximum),
-    }
+        entry = limits.get(VERIFIED_JOINT_IDS[joint])
+        if not isinstance(entry, dict):
+            return deny("LIMIT_UNVERIFIED")
+        minimum = entry.get("negative_limit")
+        maximum = entry.get("positive_limit")
+        if not (
+            str(entry.get("name", "")).lower() == joint
+            and entry.get("units") == "radians"
+            and bool(entry.get("verified_by"))
+            and _is_finite_number(minimum)
+            and _is_finite_number(maximum)
+            and minimum <= maximum
+        ):
+            return deny("LIMIT_UNVERIFIED")
+        checks["limit_verified"] = True
+        checks["verified_limit"] = {
+            "joint_id": int(VERIFIED_JOINT_IDS[joint]),
+            "min": float(minimum),
+            "max": float(maximum),
+        }
 
     if not minimum <= target_value <= maximum:
         return deny("TARGET_OUT_OF_LIMIT")
-    checks["target_in_limit"] = True
+    checks[
+        "target_in_operational_bounds" if joint == "base" else "target_in_limit"
+    ] = True
 
     max_delta = target.get("max_delta")
     if max_delta is not None:
@@ -185,6 +201,8 @@ def evaluate_motion_permit(
 
 
 __all__ = [
+    "BASE_OPERATIONAL_MAX",
+    "BASE_OPERATIONAL_MIN",
     "DEFAULT_LIMITS_PATH",
     "MotionPermit",
     "evaluate_motion_permit",

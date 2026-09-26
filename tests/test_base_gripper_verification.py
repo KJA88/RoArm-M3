@@ -191,7 +191,13 @@ class VerificationToolTests(unittest.TestCase):
         }
         self.assertEqual(
             public,
-            {"move_base", "move_gripper", "read_state", "set_torque"},
+            {
+                "close",
+                "move_base",
+                "move_gripper",
+                "read_state",
+                "set_torque",
+            },
         )
 
     def test_non_2xx_http_startup_fails_closed(self):

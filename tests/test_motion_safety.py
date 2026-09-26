@@ -72,8 +72,24 @@ class PermitDecisionTests(unittest.TestCase):
                         "TARGET_OUT_OF_LIMIT",
                     )
 
+    def test_base_verified_operational_bounds_are_inclusive(self):
+        for target in (-1.57, 1.60):
+            with self.subTest(target=target):
+                result = evaluate("base", target)
+                self.assertTrue(result["allowed"])
+                self.assertEqual(
+                    result["checks"]["verified_operational_bounds"]["kind"],
+                    "operational_not_mechanical",
+                )
+        for target in (-1.570001, 1.600001):
+            with self.subTest(target=target):
+                self.assertEqual(
+                    evaluate("base", target)["reason"],
+                    "TARGET_OUT_OF_LIMIT",
+                )
+
     def test_unverified_unknown_and_nonfinite_targets_deny(self):
-        for joint in ("base", "roll", "gripper"):
+        for joint in ("roll", "gripper"):
             self.assertEqual(evaluate(joint, 0.0)["reason"], "LIMIT_UNVERIFIED")
         self.assertEqual(evaluate("unknown", 0.0)["reason"], "UNKNOWN_JOINT")
         for target in (math.nan, math.inf, -math.inf):
@@ -195,11 +211,10 @@ class FakeTransport:
         self.commands = []
         self.closed = False
 
-    def write(self, payload):
-        self.commands.append(payload)
-
-    def readline(self):
-        return b"mock\n"
+    def move_joint(self, joint, target):
+        packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+        self.commands.append(packet)
+        return {"T": 102}
 
     def close(self):
         self.closed = True

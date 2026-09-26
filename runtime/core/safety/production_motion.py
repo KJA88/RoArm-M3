@@ -1,20 +1,20 @@
 """Single production adapter from constrained intent to local execution."""
-from functools import lru_cache
-import importlib.util
 import json
+import os
 from pathlib import Path
 
 from .motion_authority import LocalMotionAuthority, MotionNotAuthorized
 from .motion_permit import evaluate_motion_permit
 from runtime.core.supervisor.mechanical_supervisor import MechanicalSupervisor
+from runtime.core.transport.roarm_http import (
+    DEFAULT_HTTP_BASE_URL,
+    RoArmHttpClient,
+    RoArmProductionHttpTransport,
+    normalize_feedback,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-STATE_READER = (
-    REPO_ROOT
-    / "milestones/Phase_1_System_Authority/03_deterministic_pipelines"
-    / "milestone_03_state_reader.py"
-)
 GRIPPER_MAP = REPO_ROOT / "runtime/core/calibration/gripper_map.json"
 
 
@@ -29,35 +29,22 @@ def _denied(action, reason, **details):
     }
 
 
-@lru_cache(maxsize=1)
-def _state_module():
-    spec = importlib.util.spec_from_file_location(
-        "roarm_production_state_reader", STATE_READER
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("RoArm state reader is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _read_state():
-    return _state_module().get_feedback()
+    base_url = os.environ.get("ROARM_HTTP_BASE_URL", DEFAULT_HTTP_BASE_URL)
+    transport = RoArmHttpClient(base_url)
+    try:
+        return normalize_feedback(
+            transport.read_state(),
+            base_url=base_url,
+        )
+    finally:
+        transport.close()
 
 
 def _open_transport():
-    import serial
-
-    module = _state_module()
-    transport = serial.Serial(
-        module.choose_port(),
-        module.BAUD,
-        timeout=1.0,
-        dsrdtr=None,
+    return RoArmProductionHttpTransport(
+        os.environ.get("ROARM_HTTP_BASE_URL", DEFAULT_HTTP_BASE_URL)
     )
-    transport.setRTS(False)
-    transport.setDTR(False)
-    return transport
 
 
 class ProductionMotionAdapter:

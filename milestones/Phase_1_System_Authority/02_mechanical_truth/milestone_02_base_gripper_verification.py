@@ -5,15 +5,25 @@ import json
 import math
 import os
 from pathlib import Path
-import requests
+import sys
 import time
 from uuid import uuid4
 
 
-HTTP_TIMEOUT = 5.0
-DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from runtime.core.transport.roarm_http import (  # noqa: E402
+    DEFAULT_HTTP_BASE_URL,
+    HTTP_TIMEOUT_S,
+    RoArmHttpClient,
+)
+
+
+HTTP_TIMEOUT = HTTP_TIMEOUT_S
 LOG_DIR = (
-    Path(__file__).resolve().parents[3]
+    REPO_ROOT
     / "runtime/core/calibration/logs"
 )
 BASE_STEPS = {0.01, 0.05, 0.25}
@@ -32,35 +42,8 @@ class VerificationError(RuntimeError):
     """Fail-closed verification error."""
 
 
-class RoArmHttpTransport:
+class RoArmHttpTransport(RoArmHttpClient):
     """Fixed-purpose HTTP transport; no arbitrary command surface."""
-
-    def __init__(
-        self,
-        base_url=DEFAULT_HTTP_BASE_URL,
-        *,
-        timeout_s=HTTP_TIMEOUT,
-        session=None,
-    ):
-        self.base_url = str(base_url).rstrip("/")
-        if not self.base_url:
-            raise ValueError("ROARM_HTTP_BASE_URL must not be empty")
-        self.timeout_s = float(timeout_s)
-        self._session = requests.Session() if session is None else session
-        self._session.trust_env = False
-
-    def _get(self, packet):
-        command = json.dumps(packet, separators=(",", ":"))
-        url = f"{self.base_url}/js?json={command}"
-        response = self._session.get(url, timeout=self.timeout_s)
-        response.raise_for_status()
-        result = json.loads(response.text)
-        if not isinstance(result, dict):
-            raise VerificationError("HTTP_RESPONSE_NOT_OBJECT")
-        return result
-
-    def read_state(self):
-        return self._get({"T": 105})
 
     def set_torque(self, enabled):
         return self._get({"T": 210, "cmd": 1 if enabled else 0})

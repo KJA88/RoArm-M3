@@ -19,138 +19,35 @@ Safety:
 
 import json
 import os
+from pathlib import Path
+import sys
 import time
-import serial
 
 
-BAUD = 115200
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-PREFERRED_PORT = (
-    "/dev/serial/by-id/"
-    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
-    "5c6dc8363f01f01180d7c1295c2a50c9-if00-port0"
+from runtime.core.transport.roarm_http import (  # noqa: E402
+    DEFAULT_HTTP_BASE_URL,
+    RoArmHttpClient,
+    normalize_feedback,
 )
-
-FALLBACK_PORT = "/dev/ttyUSB0"
-
-
-def choose_port():
-    """Return the verified stable RoArm serial device when available."""
-    if os.path.exists(PREFERRED_PORT):
-        return PREFERRED_PORT
-
-    if os.path.exists(FALLBACK_PORT):
-        return FALLBACK_PORT
-
-    raise FileNotFoundError(
-        "RoArm serial device not found. "
-        f"Tried {PREFERRED_PORT} and {FALLBACK_PORT}"
-    )
 
 
 def get_feedback():
-    """
-    Perform one deterministic read-only firmware-state query.
-
-    Sends exactly:
-        {"T":105}
-
-    Accepts only:
-        T == 1051
-    """
-
-    port = choose_port()
-
-    ser = serial.Serial(
-        port,
-        BAUD,
-        timeout=0.2,
-        dsrdtr=None,
-    )
-
-    ser.setRTS(False)
-    ser.setDTR(False)
-
+    """Perform one HTTP T=105 query and require a T=1051 response."""
+    base_url = os.environ.get("ROARM_HTTP_BASE_URL", DEFAULT_HTTP_BASE_URL)
+    transport = RoArmHttpClient(base_url)
     try:
-        time.sleep(0.2)
-
-        # Discard stale serial input so the returned packet belongs
-        # to this query.
-        ser.reset_input_buffer()
-
-        # The ONLY robot command issued by this reader.
-        ser.write(b'{"T":105}\n')
-        ser.flush()
-
-        deadline = time.monotonic() + 1.5
-        feedback = None
-
-        while time.monotonic() < deadline:
-            raw = ser.readline()
-
-            if not raw:
-                continue
-
-            line = raw.decode("utf-8", errors="ignore").strip()
-
-            if not (line.startswith("{") and line.endswith("}")):
-                continue
-
-            try:
-                packet = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            # Ignore all unrelated firmware chatter.
-            if packet.get("T") == 1051:
-                feedback = packet
-
-        if feedback is None:
-            raise RuntimeError(
-                "No valid T=1051 feedback received within timeout"
-            )
-
-        timestamp = time.time()
-
-        return {
-            "connected": True,
-            "fresh": True,
-            "port": port,
-            "baud": BAUD,
-            "timestamp_unix": timestamp,
-
-            "pose": {
-                "x": feedback.get("x"),
-                "y": feedback.get("y"),
-                "z": feedback.get("z"),
-                "tilt": feedback.get("tit"),
-            },
-
-            "joints": {
-                "base": feedback.get("b"),
-                "shoulder": feedback.get("s"),
-                "elbow": feedback.get("e"),
-                "wrist": feedback.get("t"),
-                "roll": feedback.get("r"),
-                "gripper": feedback.get("g"),
-            },
-
-            # Preserve firmware fields whose meanings have not yet
-            # been authoritatively assigned.
-            "additional_feedback": {
-                key: value
-                for key, value in feedback.items()
-                if key not in {
-                    "T", "x", "y", "z", "tit",
-                    "b", "s", "e", "t", "r", "g"
-                }
-            },
-
-            "raw_feedback": feedback,
-        }
+        return normalize_feedback(
+            transport.read_state(),
+            base_url=base_url,
+            now=time.time(),
+        )
 
     finally:
-        ser.close()
+        transport.close()
 
 
 def main():

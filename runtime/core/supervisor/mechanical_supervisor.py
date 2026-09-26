@@ -5,7 +5,6 @@ MechanicalSupervisor with local, one-shot motion authorization.
 Construction is inert. No connection, torque, mode, or motion command occurs
 until an execution method receives a valid permit from LocalMotionAuthority.
 """
-import json
 
 from runtime.core.safety import LocalMotionAuthority, MotionNotAuthorized
 
@@ -49,17 +48,7 @@ class MechanicalSupervisor:
 
         self.authority.record_move_start(permit)
         try:
-            payload = json.dumps(
-                {
-                    "T": 102,
-                    joint: float(target),
-                    "spd": 0,
-                    "acc": 0,
-                },
-                separators=(",", ":"),
-            ) + "\n"
-            self._transport.write(payload.encode("ascii"))
-            response = self._transport.readline()
+            response = self._transport.move_joint(joint, float(target))
         except Exception as exc:
             self.authority.record_move_result(
                 permit,
@@ -68,7 +57,7 @@ class MechanicalSupervisor:
             )
             raise
         self.authority.record_move_result(permit, succeeded=True)
-        return response.decode("ascii", errors="ignore").strip()
+        return response
 
     def move_to_pose(
         self,

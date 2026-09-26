@@ -2,13 +2,19 @@ import ast
 import importlib.util
 import json
 from pathlib import Path
+import requests
 import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlparse
 
 from runtime.core.safety.motion_authority import LocalMotionAuthority
 from runtime.core.safety.production_motion import ProductionMotionAdapter
+from runtime.core.transport.roarm_http import (
+    RoArmProductionHttpTransport,
+    normalize_feedback,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,14 +46,88 @@ class FakeTransport:
         self.commands = []
         self.closed = False
 
-    def write(self, payload):
-        self.commands.append(payload)
-
-    def readline(self):
-        return b'{"T":1051}\n'
+    def move_joint(self, joint, target):
+        packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+        self.commands.append(packet)
+        return {"T": 102}
 
     def close(self):
         self.closed = True
+
+
+class FakeHttpResponse:
+    def __init__(self, packet):
+        self.text = json.dumps(packet)
+
+    def raise_for_status(self):
+        return None
+
+
+class FakeHttpSession:
+    def __init__(self, error=None):
+        self.trust_env = True
+        self.error = error
+        self.requests = []
+        self.closed = False
+
+    def get(self, url, timeout):
+        command = json.loads(parse_qs(urlparse(url).query)["json"][0])
+        self.requests.append((url, command, timeout))
+        if self.error is not None:
+            raise self.error
+        if command == {"T": 105}:
+            return FakeHttpResponse(
+                {"T": 1051, "b": 0.25, "s": 0.0, "e": 1.0, "t": 0.0}
+            )
+        return FakeHttpResponse({"T": command["T"]})
+
+    def close(self):
+        self.closed = True
+
+
+class HttpTransportTests(unittest.TestCase):
+    def test_fixed_http_state_and_motion_protocol(self):
+        http = FakeHttpSession()
+        transport = RoArmProductionHttpTransport(session=http)
+
+        feedback = transport.read_state()
+        state = normalize_feedback(feedback, base_url=transport.base_url)
+        transport.move_joint("base", 0.25)
+        transport.close()
+
+        self.assertFalse(http.trust_env)
+        self.assertEqual(
+            [request[1] for request in http.requests],
+            [
+                {"T": 105},
+                {"T": 102, "base": 0.25, "spd": 0, "acc": 0},
+            ],
+        )
+        self.assertTrue(
+            all(url.startswith("http://192.168.4.1/js?json=")
+                for url, _, _ in http.requests)
+        )
+        self.assertEqual([request[2] for request in http.requests], [5.0, 5.0])
+        self.assertEqual(state["joints"]["base"], 0.25)
+        self.assertEqual(state["transport"], "http")
+        self.assertTrue(http.closed)
+
+    def test_motion_http_error_is_not_retried(self):
+        http = FakeHttpSession(error=requests.Timeout("simulated timeout"))
+        transport = RoArmProductionHttpTransport(session=http)
+
+        with self.assertRaises(requests.Timeout):
+            transport.move_joint("elbow", 1.0)
+
+        self.assertEqual(len(http.requests), 1)
+
+    def test_production_transport_has_no_generic_command_api(self):
+        public = {
+            name
+            for name in dir(RoArmProductionHttpTransport)
+            if not name.startswith("_")
+        }
+        self.assertEqual(public, {"close", "move_joint", "read_state"})
 
 
 class ProductionAdapterTests(unittest.TestCase):
@@ -72,9 +152,8 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertTrue(result["permit_consumed"])
         self.assertTrue(transport.closed)
         self.assertEqual(len(transport.commands), 1)
-        packet = json.loads(transport.commands[0])
         self.assertEqual(
-            packet,
+            transport.commands[0],
             {"T": 102, "elbow": 1.2, "spd": 0, "acc": 0},
         )
 
@@ -96,27 +175,56 @@ class ProductionAdapterTests(unittest.TestCase):
                 self.assertEqual(result["reason"], reason)
         factory.assert_not_called()
 
-    def test_unverified_joint_does_not_block_verified_joint(self):
+    def test_uncertain_http_motion_is_not_retried(self):
+        transport = Mock()
+        transport.move_joint.side_effect = requests.Timeout(
+            "simulated motion timeout"
+        )
+        result = self.adapter(
+            fresh_state(), lambda: transport
+        ).execute_joint("elbow", 1.0)
+
+        self.assertEqual(result["reason"], "EXECUTION_FAILED")
+        self.assertTrue(result["permit_consumed"])
+        transport.move_joint.assert_called_once_with("elbow", 1.0)
+        transport.close.assert_called_once_with()
+
+    def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
         adapter = self.adapter(fresh_state(), lambda: transport)
         self.assertTrue(adapter.execute_joint("elbow", 1.0)["ok"])
 
-        blocked_factory = Mock()
-        blocked = self.adapter(fresh_state(), blocked_factory).execute_joint(
-            "base", 0.0
+        base_transport = FakeTransport()
+        result = self.adapter(
+            fresh_state(), lambda: base_transport
+        ).execute_joint("base", 0.0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            base_transport.commands[0],
+            {"T": 102, "base": 0.0, "spd": 0, "acc": 0},
         )
-        self.assertEqual(blocked["reason"], "LIMIT_UNVERIFIED")
-        blocked_factory.assert_not_called()
 
     def test_named_pose_preflights_all_targets_before_execution(self):
-        factory = Mock()
+        transports = []
+
+        def factory():
+            transport = FakeTransport()
+            transports.append(transport)
+            return transport
+
         adapter = self.adapter(fresh_state(), factory)
         result = adapter.execute_named_pose(
             "mixed", {"shoulder": 0.0, "base": 0.0}
         )
-        self.assertEqual(result["reason"], "LIMIT_UNVERIFIED")
-        self.assertEqual(result["blocked_joint"], "base")
-        factory.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(transports), 2)
+        self.assertEqual(
+            [transport.commands[0] for transport in transports],
+            [
+                {"T": 102, "shoulder": 0.0, "spd": 0, "acc": 0},
+                {"T": 102, "base": 0.0, "spd": 0, "acc": 0},
+            ],
+        )
 
     def test_gripper_map_is_reported_but_not_activated(self):
         result = self.adapter(fresh_state(), Mock()).gripper_finding("open")
@@ -265,6 +373,27 @@ class DelegationTests(unittest.TestCase):
 
 
 class StaticProductionPathTests(unittest.TestCase):
+    def test_production_transport_and_state_reader_have_no_serial_fallback(self):
+        paths = (
+            ROOT / "runtime/core/safety/production_motion.py",
+            ROOT / "runtime/core/supervisor/mechanical_supervisor.py",
+            MILESTONE / "milestone_03_state_reader.py",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                imports = {
+                    name.split(".")[0]
+                    for node in ast.walk(tree)
+                    if isinstance(node, (ast.Import, ast.ImportFrom))
+                    for name in (
+                        [item.name for item in node.names]
+                        if isinstance(node, ast.Import)
+                        else [node.module or ""]
+                    )
+                }
+                self.assertNotIn("serial", imports)
+
     def test_mcp_has_no_direct_transport_or_raw_motion_packets(self):
         path = ROOT / "mcp/mcp_server.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
