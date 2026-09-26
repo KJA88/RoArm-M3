@@ -16,8 +16,13 @@ def execute_task_probe_z300():
     return _execute("task_probe_z300")
 
 
+def execute_task_probe_x300():
+    return _execute("task_probe_x300")
+
+
 __all__ = [
     "execute_task_probe_center",
+    "execute_task_probe_x300",
     "execute_task_probe_z200",
     "execute_task_probe_z300",
 ]

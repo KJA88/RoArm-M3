@@ -114,5 +114,47 @@
         },
         "observed_behavior": "clamped",
         "notes": "Schema category means the arm moved but did not reach the requested XYZ. Requested Z changed +50.000 mm and reported settled Z changed +49.9238785 mm. The Z errors are -11.1334837 mm and -11.2096052 mm, a difference of only -0.0761215 mm. This is evidence of a repeatable offset along this tested line, not evidence of a workspace clamp. X error changed with pose, so no global Cartesian correction is justified. No compensation is applied."
+    },
+    {
+        "requested_pose": {
+            "name": "task_probe_z200",
+            "x": 250.0,
+            "y": 0.0,
+            "z": 200.0,
+            "pitch": 0.0
+        },
+        "settled_delayed_t105": {
+            "T": 1051,
+            "x": 251.3942329,
+            "y": -0.385634226,
+            "z": 194.3709341,
+            "tit": 0.024543693,
+            "b": -0.001533981,
+            "s": -0.394233062,
+            "e": 2.089281833,
+            "t": -0.099708751,
+            "r": 0.003067962,
+            "g": 1.612213808,
+            "tB": 19,
+            "tS": 39,
+            "tE": 23,
+            "tT": 43,
+            "tR": 0
+        },
+        "errors": {
+            "x_mm": 1.3942329,
+            "y_mm": -0.385634226,
+            "z_mm": -5.6290659,
+            "pitch_rad": 0.024543693,
+            "roll_preserved_exactly": true,
+            "gripper_preserved_exactly": true
+        },
+        "comparison_to_prior_vertical_probes": {
+            "z200_z_error_mm": -5.6290659,
+            "z250_z_error_mm": -11.1334837,
+            "z300_z_error_mm": -11.2096052
+        },
+        "observed_behavior": "clamped",
+        "notes": "Schema category means the arm moved but did not reach the requested XYZ. It is not evidence of a workspace clamp. Z errors are pose/configuration dependent: Z200 -5.6291 mm, Z250 -11.1335 mm, and Z300 -11.2096 mm. The previously suspected constant approximately 11.2 mm Z offset is not supported. Roll and gripper were preserved exactly. No compensation is applied."
     }
 ]

@@ -29,9 +29,21 @@ TASK_PROBE_Z300 = {
     "z": 300.0,
     "pitch": 0.0,
 }
+TASK_PROBE_X300 = {
+    "name": "task_probe_x300",
+    "x": 300.0,
+    "y": 0.0,
+    "z": 250.0,
+    "pitch": 0.0,
+}
 NAMED_TASK_PROBES = {
     probe["name"]: probe
-    for probe in (TASK_PROBE_Z200, TASK_PROBE_CENTER, TASK_PROBE_Z300)
+    for probe in (
+        TASK_PROBE_Z200,
+        TASK_PROBE_CENTER,
+        TASK_PROBE_Z300,
+        TASK_PROBE_X300,
+    )
 }
 
 
@@ -71,6 +83,7 @@ def _finite(value):
 __all__ = [
     "NAMED_TASK_PROBES",
     "TASK_PROBE_CENTER",
+    "TASK_PROBE_X300",
     "TASK_PROBE_Z200",
     "TASK_PROBE_Z300",
     "TASK_SPACE_BOUNDS",

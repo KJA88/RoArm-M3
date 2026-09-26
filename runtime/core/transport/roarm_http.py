@@ -159,9 +159,10 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
 
     def move_named_task_probe(self, name, *, roll, gripper):
         targets = {
-            "task_probe_z200": 200.0,
-            "task_probe_center": 250.0,
-            "task_probe_z300": 300.0,
+            "task_probe_z200": (250.0, 200.0),
+            "task_probe_center": (250.0, 250.0),
+            "task_probe_z300": (250.0, 300.0),
+            "task_probe_x300": (300.0, 250.0),
         }
         if name not in targets:
             raise RoArmHttpError("TASK_PROBE_NOT_AUTHORIZED")
@@ -172,12 +173,13 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             for value in (roll, gripper)
         ):
             raise RoArmHttpError("TASK_PRESERVATION_STATE_INVALID")
+        x, z = targets[name]
         return self._get(
             {
                 "T": 104,
-                "x": 250.0,
+                "x": x,
                 "y": 0.0,
-                "z": targets[name],
+                "z": z,
                 "t": 0.0,
                 "r": float(roll),
                 "g": float(gripper),
