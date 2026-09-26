@@ -336,6 +336,8 @@ Demonstrated base-scan T101 spd 200 and acc 10 are finite, non-maximum values. a
 
 The documented way to reduce joint start/stop harshness is a non-zero spd below the maximum and a low non-zero acc. Zero is not that setting. T104 can be slowed only through its spd coefficient. No official page says that this removes post-stop mechanical rocking. These facts are recorded only; the packets are unchanged.
 
+The same current sources distinguish T104 from T1041, and they classify the official URDF, IK, MoveIt, driver, and vision trees. That comparison is in docs/01_REFERENCE_EXTERNAL/waveshare_official_reuse_audit.md. Production task-space probes remain T104. The SDK pose path emits T1041 and is not a production command.
+
 Definition of Done (Acceptance Criteria)
 
 Milestone 05 is DONE only if all conditions are met:

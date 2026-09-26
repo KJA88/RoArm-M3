@@ -86,7 +86,7 @@ For a given task-space pose {X, Y, Z, Pitch}:
 
 Firmware IK Path
 
-Command pose via pose_ctrl()
+The production task-space command on this arm is HTTP T104. Current Waveshare pose_ctrl emits T1041, which the control wiki describes as the fastest uninterpolated goal. Milestone 09 compares geometry with observed firmware behavior. It does not switch that production command. Official URDF and host IK candidates are recorded in docs/01_REFERENCE_EXTERNAL/waveshare_official_reuse_audit.md.
 
 Observe reported joint angles or end pose
 
