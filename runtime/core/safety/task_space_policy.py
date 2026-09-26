@@ -15,6 +15,17 @@ TASK_PROBE_CENTER = {
     "z": 250.0,
     "pitch": 0.0,
 }
+TASK_PROBE_Z300 = {
+    "name": "task_probe_z300",
+    "x": 250.0,
+    "y": 0.0,
+    "z": 300.0,
+    "pitch": 0.0,
+}
+NAMED_TASK_PROBES = {
+    probe["name"]: probe
+    for probe in (TASK_PROBE_CENTER, TASK_PROBE_Z300)
+}
 
 
 def validate_task_space_target(target):
@@ -31,11 +42,15 @@ def validate_task_space_target(target):
     )
 
 
+def is_named_task_probe(target):
+    if not validate_task_space_target(target):
+        return False
+    expected = NAMED_TASK_PROBES.get(target["name"])
+    return expected is not None and target == expected
+
+
 def is_task_probe_center(target):
-    return validate_task_space_target(target) and all(
-        target[field] == expected
-        for field, expected in TASK_PROBE_CENTER.items()
-    )
+    return target == TASK_PROBE_CENTER
 
 
 def _finite(value):
@@ -47,8 +62,11 @@ def _finite(value):
 
 
 __all__ = [
+    "NAMED_TASK_PROBES",
     "TASK_PROBE_CENTER",
+    "TASK_PROBE_Z300",
     "TASK_SPACE_BOUNDS",
+    "is_named_task_probe",
     "is_task_probe_center",
     "validate_task_space_target",
 ]

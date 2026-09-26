@@ -10,7 +10,7 @@ from .existing_motions import (
     SCAN_RIGHT_BASE_TARGET,
 )
 from .gripper_policy import resolve_gripper_preset
-from .task_space_policy import TASK_PROBE_CENTER
+from .task_space_policy import NAMED_TASK_PROBES
 from .motion_authority import LocalMotionAuthority, MotionNotAuthorized
 from .motion_permit import evaluate_motion_permit
 from runtime.core.supervisor.mechanical_supervisor import MechanicalSupervisor
@@ -360,9 +360,16 @@ class ProductionMotionAdapter:
             if transport is not None:
                 transport.close()
 
-    def execute_task_probe_center(self):
-        action = "task_probe_center"
-        target = dict(TASK_PROBE_CENTER)
+    def execute_named_task_probe(self, name):
+        action = name if isinstance(name, str) else "task_probe"
+        target = NAMED_TASK_PROBES.get(name)
+        if target is None:
+            return _denied(
+                action,
+                "TASK_PROBE_NOT_AUTHORIZED",
+                requested_probe=name,
+            )
+        target = dict(target)
         current_state, denied = self._state(action)
         if denied:
             return denied
@@ -381,7 +388,7 @@ class ProductionMotionAdapter:
                 transport=transport,
                 authority=self.authority,
             )
-            response = supervisor.move_task_probe_center(
+            response = supervisor.move_named_task_probe(
                 target,
                 permit=permit,
                 current_state=current_state,
@@ -674,8 +681,12 @@ def execute_gripper_position(preset):
     return _DEFAULT_ADAPTER.execute_gripper_preset(preset)
 
 
+def execute_named_task_probe(name):
+    return _DEFAULT_ADAPTER.execute_named_task_probe(name)
+
+
 def execute_task_probe_center():
-    return _DEFAULT_ADAPTER.execute_task_probe_center()
+    return execute_named_task_probe("task_probe_center")
 
 
 def deny_unsupported(action, **details):
@@ -693,6 +704,7 @@ __all__ = [
     "execute_gripper_position",
     "execute_named_pose",
     "execute_named_sequence",
+    "execute_named_task_probe",
     "execute_scan",
     "execute_task_probe_center",
     "inspect_gripper",

@@ -28,5 +28,47 @@
             "p": -1.57
         },
         "hardware_reply": null
+    },
+    {
+        "requested_pose": {
+            "name": "task_probe_center",
+            "x": 250.0,
+            "y": 0.0,
+            "z": 250.0,
+            "pitch": 0.0
+        },
+        "pre_move_preservation": {
+            "roll": 0.003067962,
+            "gripper": 1.612213808
+        },
+        "immediate_firmware_response_classification": "PRE_MOVE_STATE_NOT_SETTLED_POSE",
+        "settled_delayed_t105": {
+            "T": 1051,
+            "x": 250.3093847,
+            "y": -0.383970088,
+            "z": 238.8665163,
+            "tit": 0.033747577,
+            "b": -0.001533981,
+            "s": -0.391165101,
+            "e": 1.767145868,
+            "t": 0.228563137,
+            "r": 0.003067962,
+            "g": 1.612213808,
+            "tB": 19,
+            "tS": 0,
+            "tE": 111,
+            "tT": 0,
+            "tR": 0
+        },
+        "errors": {
+            "x_mm": 0.3093847,
+            "y_mm": -0.383970088,
+            "z_mm": -11.1334837,
+            "pitch_rad": 0.033747577,
+            "roll_preserved_exactly": true,
+            "gripper_preserved_exactly": true
+        },
+        "observed_behavior": "clamped",
+        "notes": "interior probe moved with significant Z offset; cause not yet established."
     }
 ]

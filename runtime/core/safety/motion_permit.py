@@ -11,7 +11,7 @@ from .gripper_policy import (
     DEFAULT_GRIPPER_MAP_PATH,
     load_verified_gripper_presets,
 )
-from .task_space_policy import is_task_probe_center
+from .task_space_policy import is_named_task_probe
 
 
 DEFAULT_LIMITS_PATH = (
@@ -344,7 +344,7 @@ def evaluate_task_space_probe_permit(
         return deny("TASK_STATE_INVALID")
     checks["full_t105_state_valid"] = True
 
-    if not is_task_probe_center(target):
+    if not is_named_task_probe(target):
         return deny("TASK_PROBE_NOT_AUTHORIZED")
     checks["target_contract_valid"] = True
     checks["target_named_exact"] = True

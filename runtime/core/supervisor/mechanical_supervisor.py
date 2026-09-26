@@ -240,7 +240,7 @@ class MechanicalSupervisor:
         self.authority.record_move_result(permit, succeeded=True)
         return response
 
-    def move_task_probe_center(
+    def move_named_task_probe(
         self,
         target,
         *,
@@ -284,7 +284,8 @@ class MechanicalSupervisor:
 
         self.authority.record_move_start(permit)
         try:
-            response = self._transport.move_task_probe_center(
+            response = self._transport.move_named_task_probe(
+                target["name"],
                 roll=preserved["roll"],
                 gripper=preserved["gripper"],
             )

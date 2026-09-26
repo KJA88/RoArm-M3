@@ -172,7 +172,9 @@ class LocalMotionAuthority:
             self.audit.record(
                 "permit_rejected",
                 reason=decision["reason"],
-                requested_action="task_probe_center",
+                requested_action=target.get("name")
+                if isinstance(target, dict)
+                else None,
                 requested_target=target,
             )
             raise MotionNotAuthorized(decision["reason"], decision["checks"])
@@ -182,7 +184,7 @@ class LocalMotionAuthority:
             permit_id=str(uuid4()),
             issued_at=_stamp(issued_timestamp),
             expires_at=_stamp(issued_timestamp + self.permit_ttl_s),
-            allowed_action="task_probe_center",
+            allowed_action=target["name"],
             allowed_target=dict(target),
             consumed=False,
             _authority_id=self._authority_id,
@@ -286,7 +288,7 @@ class LocalMotionAuthority:
         now=None,
         max_state_age_s=2.0,
     ):
-        action = "task_probe_center"
+        action = target.get("name") if isinstance(target, dict) else None
         self.audit.record(
             "move_requested",
             permit_id=getattr(permit, "permit_id", None),

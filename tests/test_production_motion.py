@@ -30,8 +30,10 @@ from runtime.core.safety.motion_authority import (
 )
 from runtime.core.safety.production_motion import ProductionMotionAdapter
 from runtime.core.safety.task_space_policy import (
+    NAMED_TASK_PROBES,
     TASK_PROBE_CENTER,
-    is_task_probe_center,
+    TASK_PROBE_Z300,
+    is_named_task_probe,
     validate_task_space_target,
 )
 from runtime.core.transport.roarm_http import (
@@ -152,12 +154,12 @@ class FakeTransport:
         self.commands.append(packet)
         return {"T": 102}
 
-    def move_task_probe_center(self, *, roll, gripper):
+    def move_named_task_probe(self, name, *, roll, gripper):
         packet = {
             "T": 104,
             "x": 250.0,
             "y": 0.0,
-            "z": 250.0,
+            "z": NAMED_TASK_PROBES[name]["z"],
             "t": 0.0,
             "r": roll,
             "g": gripper,
@@ -296,7 +298,12 @@ class TaskSpacePolicyTests(unittest.TestCase):
                 self.assertFalse(validate_task_space_target(target))
 
     def test_only_exact_named_center_probe_matches_production_policy(self):
-        self.assertTrue(is_task_probe_center(TASK_PROBE_CENTER))
+        self.assertEqual(
+            set(NAMED_TASK_PROBES),
+            {"task_probe_center", "task_probe_z300"},
+        )
+        self.assertTrue(is_named_task_probe(TASK_PROBE_CENTER))
+        self.assertTrue(is_named_task_probe(TASK_PROBE_Z300))
         for change in (
             {"name": "other"},
             {"x": 251.0},
@@ -306,7 +313,7 @@ class TaskSpacePolicyTests(unittest.TestCase):
         ):
             target = {**TASK_PROBE_CENTER, **change}
             with self.subTest(change=change):
-                self.assertFalse(is_task_probe_center(target))
+                self.assertFalse(is_named_task_probe(target))
 
 
 class FakeHttpResponse:
@@ -373,7 +380,8 @@ class HttpTransportTests(unittest.TestCase):
             2.0,
             current_joints=state["joints"],
         )
-        transport.move_task_probe_center(
+        transport.move_named_task_probe(
+            "task_probe_center",
             roll=state["joints"]["roll"],
             gripper=state["joints"]["gripper"],
         )
@@ -476,7 +484,7 @@ class HttpTransportTests(unittest.TestCase):
                 "move_base_scan",
                 "move_gripper_preset",
                 "move_joint",
-                "move_task_probe_center",
+                "move_named_task_probe",
                 "read_state",
             },
         )
@@ -863,7 +871,7 @@ class ProductionAdapterTests(unittest.TestCase):
         state["raw_feedback"]["g"] = 2.4
         result = self.adapter(
             state, lambda: transport
-        ).execute_task_probe_center()
+        ).execute_named_task_probe("task_probe_center")
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["target"], TASK_PROBE_CENTER)
@@ -934,7 +942,7 @@ class ProductionAdapterTests(unittest.TestCase):
                 )
                 result = self.adapter(
                     state, factory
-                ).execute_task_probe_center()
+                ).execute_named_task_probe("task_probe_center")
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["reason"], reason)
                 self.assertEqual(result["hardware_action"], "NONE")
@@ -968,13 +976,13 @@ class ProductionAdapterTests(unittest.TestCase):
 
     def test_task_probe_timeout_after_consumption_is_uncertain_without_retry(self):
         transport = Mock()
-        transport.move_task_probe_center.side_effect = requests.Timeout(
+        transport.move_named_task_probe.side_effect = requests.Timeout(
             "simulated T104 timeout"
         )
         state = task_fresh_state()
         result = self.adapter(
             state, lambda: transport
-        ).execute_task_probe_center()
+        ).execute_named_task_probe("task_probe_center")
 
         self.assertFalse(result["ok"])
         self.assertTrue(result["authorized"])
@@ -983,11 +991,53 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertTrue(result["permit_consumed"])
         self.assertFalse(result["position_verified"])
         self.assertEqual(result["error"], "simulated T104 timeout")
-        transport.move_task_probe_center.assert_called_once_with(
+        transport.move_named_task_probe.assert_called_once_with(
+            "task_probe_center",
             roll=state["raw_feedback"]["r"],
             gripper=state["raw_feedback"]["g"],
         )
         transport.close.assert_called_once_with()
+
+    def test_z300_probe_sends_one_exact_preserving_t104(self):
+        transport = FakeTransport()
+        state = task_fresh_state()
+        state["raw_feedback"]["r"] = -0.021
+        state["raw_feedback"]["g"] = 2.8
+        result = self.adapter(
+            state, lambda: transport
+        ).execute_named_task_probe("task_probe_z300")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "task_probe_z300")
+        self.assertEqual(result["target"], TASK_PROBE_Z300)
+        self.assertTrue(result["permit_consumed"])
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(
+            transport.commands,
+            [
+                {
+                    "T": 104,
+                    "x": 250.0,
+                    "y": 0.0,
+                    "z": 300.0,
+                    "t": 0.0,
+                    "r": -0.021,
+                    "g": 2.8,
+                    "spd": 0.5,
+                }
+            ],
+        )
+
+    def test_unknown_task_probe_is_rejected_before_transport(self):
+        factory = Mock(side_effect=AssertionError("transport must stay closed"))
+        result = self.adapter(
+            task_fresh_state(), factory
+        ).execute_named_task_probe("task_probe_unknown")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "TASK_PROBE_NOT_AUTHORIZED")
+        self.assertEqual(result["hardware_action"], "NONE")
+        factory.assert_not_called()
 
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
@@ -1266,7 +1316,14 @@ class DelegationTests(unittest.TestCase):
         )
         task_probe._execute = Mock(return_value={"ok": False})
         task_probe.execute_task_probe_center()
-        task_probe._execute.assert_called_once_with()
+        task_probe.execute_task_probe_z300()
+        self.assertEqual(
+            task_probe._execute.call_args_list,
+            [
+                unittest.mock.call("task_probe_center"),
+                unittest.mock.call("task_probe_z300"),
+            ],
+        )
 
     def test_daily_cli_delegates(self):
         module = load_file(
