@@ -159,6 +159,7 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
 
     def move_named_task_probe(self, name, *, roll, gripper):
         targets = {
+            "task_probe_z200": 200.0,
             "task_probe_center": 250.0,
             "task_probe_z300": 300.0,
         }

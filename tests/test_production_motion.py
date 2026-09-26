@@ -32,6 +32,7 @@ from runtime.core.safety.production_motion import ProductionMotionAdapter
 from runtime.core.safety.task_space_policy import (
     NAMED_TASK_PROBES,
     TASK_PROBE_CENTER,
+    TASK_PROBE_Z200,
     TASK_PROBE_Z300,
     is_named_task_probe,
     validate_task_space_target,
@@ -300,8 +301,9 @@ class TaskSpacePolicyTests(unittest.TestCase):
     def test_only_exact_named_center_probe_matches_production_policy(self):
         self.assertEqual(
             set(NAMED_TASK_PROBES),
-            {"task_probe_center", "task_probe_z300"},
+            {"task_probe_z200", "task_probe_center", "task_probe_z300"},
         )
+        self.assertTrue(is_named_task_probe(TASK_PROBE_Z200))
         self.assertTrue(is_named_task_probe(TASK_PROBE_CENTER))
         self.assertTrue(is_named_task_probe(TASK_PROBE_Z300))
         for change in (
@@ -1028,6 +1030,35 @@ class ProductionAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_z200_probe_sends_one_exact_preserving_t104(self):
+        transport = FakeTransport()
+        state = task_fresh_state()
+        state["raw_feedback"]["r"] = 0.003067962
+        state["raw_feedback"]["g"] = 1.612213808
+        result = self.adapter(
+            state, lambda: transport
+        ).execute_named_task_probe("task_probe_z200")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "task_probe_z200")
+        self.assertEqual(result["target"], TASK_PROBE_Z200)
+        self.assertTrue(result["permit_consumed"])
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(len(transport.commands), 1)
+        self.assertEqual(
+            transport.commands[0],
+            {
+                "T": 104,
+                "x": 250.0,
+                "y": 0.0,
+                "z": 200.0,
+                "t": 0.0,
+                "r": 0.003067962,
+                "g": 1.612213808,
+                "spd": 0.5,
+            },
+        )
+
     def test_unknown_task_probe_is_rejected_before_transport(self):
         factory = Mock(side_effect=AssertionError("transport must stay closed"))
         result = self.adapter(
@@ -1316,11 +1347,13 @@ class DelegationTests(unittest.TestCase):
         )
         task_probe._execute = Mock(return_value={"ok": False})
         task_probe.execute_task_probe_center()
+        task_probe.execute_task_probe_z200()
         task_probe.execute_task_probe_z300()
         self.assertEqual(
             task_probe._execute.call_args_list,
             [
                 unittest.mock.call("task_probe_center"),
+                unittest.mock.call("task_probe_z200"),
                 unittest.mock.call("task_probe_z300"),
             ],
         )

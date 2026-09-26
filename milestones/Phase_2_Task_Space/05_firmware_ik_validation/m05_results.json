@@ -70,5 +70,49 @@
         },
         "observed_behavior": "clamped",
         "notes": "interior probe moved with significant Z offset; cause not yet established."
+    },
+    {
+        "requested_pose": {
+            "name": "task_probe_z300",
+            "x": 250.0,
+            "y": 0.0,
+            "z": 300.0,
+            "pitch": 0.0
+        },
+        "settled_delayed_t105": {
+            "T": 1051,
+            "x": 252.6484006,
+            "y": -0.387558097,
+            "z": 288.7903948,
+            "tit": 0.036815539,
+            "b": -0.001533981,
+            "s": -0.305262177,
+            "e": 1.339165228,
+            "t": 0.573708815,
+            "r": 0.003067962,
+            "g": 1.612213808,
+            "tB": 19,
+            "tS": 19,
+            "tE": 115,
+            "tT": 0,
+            "tR": 0
+        },
+        "errors": {
+            "x_mm": 2.6484006,
+            "y_mm": -0.387558097,
+            "z_mm": -11.2096052,
+            "pitch_rad": 0.036815539,
+            "roll_preserved_exactly": true,
+            "gripper_preserved_exactly": true
+        },
+        "comparison_to_task_probe_center": {
+            "requested_z_change_mm": 50.0,
+            "reported_settled_z_change_mm": 49.9238785,
+            "center_z_error_mm": -11.1334837,
+            "z300_z_error_mm": -11.2096052,
+            "z_error_difference_mm": -0.0761215
+        },
+        "observed_behavior": "clamped",
+        "notes": "Schema category means the arm moved but did not reach the requested XYZ. Requested Z changed +50.000 mm and reported settled Z changed +49.9238785 mm. The Z errors are -11.1334837 mm and -11.2096052 mm, a difference of only -0.0761215 mm. This is evidence of a repeatable offset along this tested line, not evidence of a workspace clamp. X error changed with pose, so no global Cartesian correction is justified. No compensation is applied."
     }
 ]

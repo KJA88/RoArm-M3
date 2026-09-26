@@ -8,8 +8,16 @@ def execute_task_probe_center():
     return _execute("task_probe_center")
 
 
+def execute_task_probe_z200():
+    return _execute("task_probe_z200")
+
+
 def execute_task_probe_z300():
     return _execute("task_probe_z300")
 
 
-__all__ = ["execute_task_probe_center", "execute_task_probe_z300"]
+__all__ = [
+    "execute_task_probe_center",
+    "execute_task_probe_z200",
+    "execute_task_probe_z300",
+]
