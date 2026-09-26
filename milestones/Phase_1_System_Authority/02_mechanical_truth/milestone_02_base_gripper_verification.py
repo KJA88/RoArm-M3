@@ -151,6 +151,7 @@ class BaseGripperVerification:
         self.started = False
         self.torque_enabled = False
         self.motion_blocked = False
+        self.state_unknown = False
         self.current_state = None
         self.pending_confirmation = None
         self.last_base_confirmation = None
@@ -212,6 +213,7 @@ class BaseGripperVerification:
         state = self._request_state("startup_state")
         self.current_state = state
         self.started = True
+        self.state_unknown = False
         self.log.record("initial_state", state=state)
         return state
 
@@ -239,10 +241,12 @@ class BaseGripperVerification:
             self.torque_enabled = False
 
     def recover_readback(self):
-        self._require_started()
+        if not self.started:
+            raise VerificationError("VALID_STARTUP_STATE_REQUIRED")
         state = self._request_state("explicit_readback_recovery")
         self.current_state = state
         self.motion_blocked = False
+        self.state_unknown = False
         self.log.record("motion_recovered", state=state)
         return state
 
@@ -289,18 +293,16 @@ class BaseGripperVerification:
             state = self._request_state(f"{purpose}_readback")
         except VerificationError:
             self.motion_blocked = True
+            self.state_unknown = True
+            self.current_state = None
             self.log.record(
                 "motion_blocked",
                 reason="POST_MOTION_READBACK_FAILED",
                 purpose=purpose,
                 commanded_target=target,
+                state="UNKNOWN",
+                torque_state="PRESERVED",
             )
-            try:
-                self.disable_torque()
-            except Exception as exc:
-                self.log.record(
-                    "torque_disable_failed", error=str(exc)
-                )
             raise
 
         self.current_state = state
@@ -410,18 +412,13 @@ class BaseGripperVerification:
             "proposed_base_json": self.proposed_base_json(),
             "gripper_results": self.gripper_results,
             "motion_blocked": self.motion_blocked,
+            "state_unknown": self.state_unknown,
         }
 
     def shutdown(self):
         if self._closed:
             return
         try:
-            try:
-                self.disable_torque()
-            except Exception as exc:
-                self.log.record(
-                    "torque_disable_failed", error=str(exc)
-                )
             self.log.record("final_summary", summary=self.summary())
         finally:
             close = getattr(self.transport, "close", None)
@@ -434,9 +431,9 @@ class BaseGripperVerification:
             raise VerificationError("VALID_STARTUP_STATE_REQUIRED")
 
     def _require_motion_ready(self):
-        self._require_started()
         if self.motion_blocked:
             raise VerificationError("MOTION_BLOCKED_RECOVERY_REQUIRED")
+        self._require_started()
         if not self.torque_enabled:
             raise VerificationError("TORQUE_NOT_ENABLED")
         if self.pending_confirmation is not None:
@@ -549,7 +546,7 @@ def run_interactive(session, input_fn=input, output=print):
             except VerificationError as exc:
                 output(f"DENIED: {exc}")
     except KeyboardInterrupt:
-        output("\nCtrl+C received; disabling torque and exiting.")
+        output("\nCtrl+C received; exiting without changing torque state.")
     finally:
         session.shutdown()
         output("Final verification summary:")

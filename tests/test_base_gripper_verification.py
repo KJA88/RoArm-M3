@@ -79,15 +79,18 @@ class FakeHttpResponse:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
 class FakeHttpSession:
-    def __init__(self, status_code=200):
+    def __init__(self, status_code=200, error=None):
         self.trust_env = True
         self.requests = []
         self.status_code = status_code
+        self.error = error
 
     def get(self, url, timeout):
         parsed = urlparse(url)
         command = json.loads(parse_qs(parsed.query)["json"][0])
         self.requests.append((parsed, command, timeout))
+        if self.error is not None:
+            raise self.error
         if command["T"] == 105:
             return FakeHttpResponse(
                 {"T": 1051, "b": 0.25, "g": 2.0},
@@ -198,6 +201,34 @@ class VerificationToolTests(unittest.TestCase):
             [command for _, command, _ in http.requests],
             [{"T": 105}],
         )
+        session.shutdown()
+        self.assertEqual(
+            [command for _, command, _ in http.requests],
+            [{"T": 105}],
+        )
+
+    def test_http_timeout_on_startup_emits_no_torque_command(self):
+        http = FakeHttpSession(error=requests.Timeout("simulated timeout"))
+        transport = tool.RoArmHttpTransport(
+            "http://192.168.4.1",
+            session=http,
+        )
+        session, _ = self.session(transport)
+
+        with self.assertRaisesRegex(
+            tool.VerificationError, "T105_READBACK_FAILED"
+        ):
+            tool.run_interactive(
+                session,
+                input_fn=lambda _: "quit",
+                output=lambda _: None,
+            )
+
+        self.assertEqual(
+            [command for _, command, _ in http.requests],
+            [{"T": 105}],
+        )
+        self.assertTrue(transport._session is http)
 
     def test_startup_is_read_only_and_does_not_enable_torque(self):
         session, transport = self.started_session()
@@ -257,8 +288,10 @@ class VerificationToolTests(unittest.TestCase):
         ):
             session.jog_base(0.01)
         self.assertTrue(session.motion_blocked)
-        self.assertFalse(session.torque_enabled)
-        self.assertIn({"T": 210, "cmd": 0}, transport.calls)
+        self.assertTrue(session.state_unknown)
+        self.assertIsNone(session.current_state)
+        self.assertTrue(session.torque_enabled)
+        self.assertNotIn({"T": 210, "cmd": 0}, transport.calls)
         with self.assertRaisesRegex(
             tool.VerificationError, "MOTION_BLOCKED_RECOVERY_REQUIRED"
         ):
@@ -267,23 +300,57 @@ class VerificationToolTests(unittest.TestCase):
         recovered = session.recover_readback()
         self.assertEqual(recovered["base"], 0.26)
         self.assertFalse(session.motion_blocked)
+        self.assertFalse(session.state_unknown)
         session.shutdown()
+        self.assertNotIn({"T": 210, "cmd": 0}, transport.calls)
 
-    def test_ctrl_c_path_attempts_torque_disable(self):
+    def test_ctrl_c_path_does_not_disable_torque(self):
         session, transport = self.session()
+        commands = iter(["enable"])
 
         def interrupt(_prompt):
-            raise KeyboardInterrupt
+            try:
+                return next(commands)
+            except StopIteration:
+                raise KeyboardInterrupt
 
         tool.run_interactive(session, input_fn=interrupt, output=lambda _: None)
-        self.assertIn({"T": 210, "cmd": 0}, transport.calls)
-        self.assertFalse(
-            any(
-                packet == {"T": 210, "cmd": 1}
-                for packet in transport.calls
-            )
+        self.assertEqual(
+            transport.calls,
+            [{"T": 105}, {"T": 210, "cmd": 1}],
         )
         self.assertTrue(transport.closed)
+
+    def test_normal_quit_does_not_disable_torque(self):
+        session, transport = self.session()
+        commands = iter(["enable", "quit"])
+
+        tool.run_interactive(
+            session,
+            input_fn=lambda _: next(commands),
+            output=lambda _: None,
+        )
+
+        self.assertEqual(
+            transport.calls,
+            [{"T": 105}, {"T": 210, "cmd": 1}],
+        )
+        self.assertTrue(transport.closed)
+
+    def test_explicit_disable_emits_exactly_one_torque_disable(self):
+        session, transport = self.started_session()
+
+        session.disable_torque()
+        session.shutdown()
+
+        self.assertEqual(
+            [
+                packet
+                for packet in transport.calls
+                if packet == {"T": 210, "cmd": 0}
+            ],
+            [{"T": 210, "cmd": 0}],
+        )
 
     def test_log_files_are_unique_and_append_events(self):
         now = datetime(2026, 9, 25, tzinfo=timezone.utc)
