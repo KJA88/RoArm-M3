@@ -50,6 +50,7 @@ class RoArmHttpTransport:
         command = json.dumps(packet, separators=(",", ":"))
         url = f"{self.base_url}/js?json={command}"
         response = self._session.get(url, timeout=self.timeout_s)
+        response.raise_for_status()
         result = json.loads(response.text)
         if not isinstance(result, dict):
             raise VerificationError("HTTP_RESPONSE_NOT_OBJECT")

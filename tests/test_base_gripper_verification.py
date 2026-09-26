@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
+import requests
 import tempfile
 import unittest
 from urllib.parse import parse_qs, urlparse
@@ -69,22 +70,33 @@ class FakeTransport:
 
 
 class FakeHttpResponse:
-    def __init__(self, packet):
+    def __init__(self, packet, status_code=200):
         self.text = json.dumps(packet)
+        self.status_code = status_code
 
+    def raise_for_status(self):
+        if not 200 <= self.status_code < 300:
+            raise requests.HTTPError(f"HTTP {self.status_code}")
 
 class FakeHttpSession:
-    def __init__(self):
+    def __init__(self, status_code=200):
         self.trust_env = True
         self.requests = []
+        self.status_code = status_code
 
     def get(self, url, timeout):
         parsed = urlparse(url)
         command = json.loads(parse_qs(parsed.query)["json"][0])
         self.requests.append((parsed, command, timeout))
         if command["T"] == 105:
-            return FakeHttpResponse({"T": 1051, "b": 0.25, "g": 2.0})
-        return FakeHttpResponse({"T": command["T"]})
+            return FakeHttpResponse(
+                {"T": 1051, "b": 0.25, "g": 2.0},
+                self.status_code,
+            )
+        return FakeHttpResponse(
+            {"T": command["T"]},
+            self.status_code,
+        )
 
 
 class VerificationToolTests(unittest.TestCase):
@@ -166,6 +178,25 @@ class VerificationToolTests(unittest.TestCase):
         self.assertEqual(
             public,
             {"move_base", "move_gripper", "read_state", "set_torque"},
+        )
+
+    def test_non_2xx_http_startup_fails_closed(self):
+        http = FakeHttpSession(status_code=503)
+        transport = tool.RoArmHttpTransport(
+            "http://192.168.4.1",
+            session=http,
+        )
+        session, _ = self.session(transport)
+
+        with self.assertRaisesRegex(
+            tool.VerificationError, "T105_READBACK_FAILED"
+        ):
+            session.startup()
+        self.assertFalse(session.started)
+        self.assertFalse(session.torque_enabled)
+        self.assertEqual(
+            [command for _, command, _ in http.requests],
+            [{"T": 105}],
         )
 
     def test_startup_is_read_only_and_does_not_enable_torque(self):
