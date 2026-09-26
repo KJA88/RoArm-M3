@@ -5,13 +5,12 @@ import json
 import math
 import os
 from pathlib import Path
+import requests
 import time
-from urllib.parse import urlencode
-from urllib.request import urlopen
 from uuid import uuid4
 
 
-HTTP_TIMEOUT = 1.5
+HTTP_TIMEOUT = 1.0
 DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 LOG_DIR = (
     Path(__file__).resolve().parents[3]
@@ -38,20 +37,20 @@ class RoArmHttpTransport:
         base_url=DEFAULT_HTTP_BASE_URL,
         *,
         timeout_s=HTTP_TIMEOUT,
-        urlopen_fn=urlopen,
+        session=None,
     ):
         self.base_url = str(base_url).rstrip("/")
         if not self.base_url:
             raise ValueError("ROARM_HTTP_BASE_URL must not be empty")
         self.timeout_s = float(timeout_s)
-        self._urlopen = urlopen_fn
+        self._session = requests.Session() if session is None else session
+        self._session.trust_env = False
 
     def _get(self, packet):
         command = json.dumps(packet, separators=(",", ":"))
-        query = urlencode({"json": command})
-        url = f"{self.base_url}/js?{query}"
-        with self._urlopen(url, timeout=self.timeout_s) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        url = f"{self.base_url}/js?json={command}"
+        response = self._session.get(url, timeout=self.timeout_s)
+        result = json.loads(response.text)
         if not isinstance(result, dict):
             raise VerificationError("HTTP_RESPONSE_NOT_OBJECT")
         return result

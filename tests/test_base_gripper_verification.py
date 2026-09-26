@@ -70,16 +70,21 @@ class FakeTransport:
 
 class FakeHttpResponse:
     def __init__(self, packet):
-        self.payload = json.dumps(packet).encode("utf-8")
+        self.text = json.dumps(packet)
 
-    def __enter__(self):
-        return self
 
-    def __exit__(self, *_args):
-        return False
+class FakeHttpSession:
+    def __init__(self):
+        self.trust_env = True
+        self.requests = []
 
-    def read(self):
-        return self.payload
+    def get(self, url, timeout):
+        parsed = urlparse(url)
+        command = json.loads(parse_qs(parsed.query)["json"][0])
+        self.requests.append((parsed, command, timeout))
+        if command["T"] == 105:
+            return FakeHttpResponse({"T": 1051, "b": 0.25, "g": 2.0})
+        return FakeHttpResponse({"T": command["T"]})
 
 
 class VerificationToolTests(unittest.TestCase):
@@ -103,21 +108,10 @@ class VerificationToolTests(unittest.TestCase):
         return session, transport
 
     def test_http_transport_reuses_proven_url_pattern(self):
-        requests = []
-
-        def fake_urlopen(url, timeout):
-            parsed = urlparse(url)
-            command = json.loads(parse_qs(parsed.query)["json"][0])
-            requests.append((parsed, command, timeout))
-            if command["T"] == 105:
-                return FakeHttpResponse(
-                    {"T": 1051, "b": 0.25, "g": 2.0}
-                )
-            return FakeHttpResponse({"T": command["T"]})
-
+        http = FakeHttpSession()
         transport = tool.RoArmHttpTransport(
             "http://192.168.4.1/",
-            urlopen_fn=fake_urlopen,
+            session=http,
         )
         transport.read_state()
         transport.set_torque(True)
@@ -126,7 +120,7 @@ class VerificationToolTests(unittest.TestCase):
         transport.set_torque(False)
 
         self.assertEqual(
-            [command for _, command, _ in requests],
+            [command for _, command, _ in http.requests],
             [
                 {"T": 105},
                 {"T": 210, "cmd": 1},
@@ -147,15 +141,22 @@ class VerificationToolTests(unittest.TestCase):
                 {"T": 210, "cmd": 0},
             ],
         )
-        for parsed, _, timeout in requests:
+        self.assertFalse(http.trust_env)
+        self.assertEqual(
+            http.requests[0][0].geturl(),
+            'http://192.168.4.1/js?json={"T":105}',
+        )
+        for parsed, _, timeout in http.requests:
             self.assertEqual(parsed.scheme, "http")
             self.assertEqual(parsed.netloc, "192.168.4.1")
             self.assertEqual(parsed.path, "/js")
-            self.assertEqual(timeout, 1.5)
+            self.assertEqual(timeout, 1.0)
 
     def test_tool_has_no_serial_or_generic_command_api(self):
         source = TOOL_PATH.read_text(encoding="utf-8")
         self.assertNotIn("import serial", source)
+        self.assertNotIn("urlencode", source)
+        self.assertNotIn("urlopen", source)
         self.assertNotIn("send_command", source)
         public = {
             name
