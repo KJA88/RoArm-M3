@@ -59,6 +59,63 @@ class MechanicalSupervisor:
         self.authority.record_move_result(permit, succeeded=True)
         return response
 
+    def move_arm_pose(
+        self,
+        targets,
+        *,
+        permits,
+        current_state,
+        guardian_state=None,
+        now=None,
+    ):
+        """Execute one combined arm-only command after atomic authorization."""
+        if not isinstance(targets, dict) or not isinstance(permits, dict):
+            raise MotionNotAuthorized("PERMIT_MISSING")
+        requests = [
+            {
+                "permit": permits.get(joint),
+                "action": "move_joint",
+                "joint": joint,
+                "target": target,
+            }
+            for joint, target in targets.items()
+        ]
+        decision = self.authority.authorize_many_once(
+            requests=requests,
+            current_state=current_state,
+            guardian_state=guardian_state,
+            now=now,
+        )
+        if not decision["allowed"]:
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+
+        consumed_permits = [request["permit"] for request in requests]
+        if self._transport is None:
+            error = RuntimeError("No local motion transport is configured")
+            for permit in consumed_permits:
+                self.authority.record_move_result(
+                    permit,
+                    succeeded=False,
+                    error=error,
+                )
+            raise error
+
+        for permit in consumed_permits:
+            self.authority.record_move_start(permit)
+        try:
+            response = self._transport.move_arm_pose(targets)
+        except Exception as exc:
+            for permit in consumed_permits:
+                self.authority.record_move_result(
+                    permit,
+                    succeeded=False,
+                    error=exc,
+                )
+            raise
+        for permit in consumed_permits:
+            self.authority.record_move_result(permit, succeeded=True)
+        return response
+
     def move_to_pose(
         self,
         x,

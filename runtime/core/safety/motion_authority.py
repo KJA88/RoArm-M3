@@ -137,6 +137,75 @@ class LocalMotionAuthority:
         )
         return decision
 
+    def authorize_many_once(
+        self,
+        *,
+        requests,
+        current_state,
+        guardian_state=None,
+        now=None,
+        max_state_age_s=2.0,
+    ):
+        """Atomically consume exact one-shot permits for one combined move."""
+        if (
+            not isinstance(requests, (list, tuple))
+            or not requests
+            or any(not isinstance(request, dict) for request in requests)
+        ):
+            return _result("PERMIT_MISSING", {"requests": []})
+        for request in requests:
+            self.audit.record(
+                "move_requested",
+                permit_id=getattr(request.get("permit"), "permit_id", None),
+                requested_action=request.get("action"),
+                requested_joint=request.get("joint"),
+                requested_target=request.get("target"),
+            )
+
+        with self._lock:
+            decisions = [
+                self._validate_permit(
+                    permit=request.get("permit"),
+                    action=request.get("action"),
+                    joint=request.get("joint"),
+                    target=request.get("target"),
+                    current_state=current_state,
+                    guardian_state=guardian_state,
+                    now=now,
+                    max_state_age_s=max_state_age_s,
+                )
+                for request in requests
+            ]
+            rejected = next(
+                (decision for decision in decisions if not decision["allowed"]),
+                None,
+            )
+            if rejected is None:
+                for request in requests:
+                    request["permit"].consumed = True
+
+        for request, decision in zip(requests, decisions):
+            self.audit.record(
+                "permit_accepted" if decision["allowed"] and rejected is None
+                else "permit_rejected",
+                permit_id=getattr(request.get("permit"), "permit_id", None),
+                reason=decision["reason"] if rejected is None else (
+                    rejected["reason"]
+                ),
+                requested_action=request.get("action"),
+                requested_joint=request.get("joint"),
+                requested_target=request.get("target"),
+            )
+        if rejected is not None:
+            return _result(
+                rejected["reason"],
+                {"requests": [decision["checks"] for decision in decisions]},
+            )
+        return _result(
+            "PERMIT_OK",
+            {"requests": [decision["checks"] for decision in decisions]},
+        )
+
     def _validate_permit(
         self,
         *,

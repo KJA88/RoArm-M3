@@ -16,6 +16,7 @@ from runtime.core.transport.roarm_http import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GRIPPER_MAP = REPO_ROOT / "runtime/core/calibration/gripper_map.json"
+ARM_ONLY_JOINTS = {"base", "shoulder", "elbow", "wrist"}
 
 
 def _denied(action, reason, **details):
@@ -121,8 +122,90 @@ class ProductionMotionAdapter:
             if transport is not None:
                 transport.close()
 
+    def execute_arm_pose(self, name, targets):
+        if (
+            not isinstance(targets, dict)
+            or not targets
+            or set(targets) - ARM_ONLY_JOINTS
+        ):
+            return _denied(name, "ARM_POSE_TARGETS_INVALID")
+        current_state, denied = self._state(name)
+        if denied:
+            return denied
+
+        checks = {}
+        for joint, target in targets.items():
+            decision = evaluate_motion_permit(
+                current_state=current_state,
+                target={"joint": joint, "target": target},
+                limits_path=self.authority.limits_path,
+            )
+            checks[joint] = decision
+            if not decision["allowed"]:
+                return _denied(
+                    name,
+                    decision["reason"],
+                    blocked_joint=joint,
+                    checks=checks,
+                )
+
+        permits = {}
+        try:
+            for joint, target in targets.items():
+                permits[joint] = self.authority.issue_permit(
+                    current_state=current_state,
+                    joint=joint,
+                    target=target,
+                )
+        except MotionNotAuthorized as exc:
+            return _denied(name, exc.reason, checks=exc.checks)
+
+        transport = None
+        try:
+            transport = self.transport_factory()
+            supervisor = MechanicalSupervisor(
+                transport=transport,
+                authority=self.authority,
+            )
+            response = supervisor.move_arm_pose(
+                targets,
+                permits=permits,
+                current_state=current_state,
+            )
+            return {
+                "ok": True,
+                "authorized": True,
+                "action": name,
+                "targets": {joint: float(value) for joint, value in targets.items()},
+                "permit_ids": {
+                    joint: permit.permit_id
+                    for joint, permit in permits.items()
+                },
+                "permits_consumed": all(
+                    permit.consumed for permit in permits.values()
+                ),
+                "response": response,
+                "hardware_action": "ARM_ONLY_T102_EXECUTED",
+            }
+        except Exception as exc:
+            return _denied(
+                name,
+                "EXECUTION_FAILED",
+                permit_ids={
+                    joint: permit.permit_id
+                    for joint, permit in permits.items()
+                },
+                permits_consumed=all(
+                    permit.consumed for permit in permits.values()
+                ),
+                error=str(exc),
+            )
+        finally:
+            if transport is not None:
+                transport.close()
+
     def execute_named_pose(self, name, targets):
-        return self.execute_named_sequence(name, (("pose", targets),))
+        return self.execute_arm_pose(name, targets)
 
     def execute_named_sequence(self, name, stages):
         """Preflight every target in every stage before allowing movement."""
@@ -142,6 +225,7 @@ class ProductionMotionAdapter:
                 decision = evaluate_motion_permit(
                     current_state=current_state,
                     target={"joint": joint, "target": target},
+                    limits_path=self.authority.limits_path,
                 )
                 checks[stage_name][joint] = decision
                 if not decision["allowed"]:
@@ -155,14 +239,17 @@ class ProductionMotionAdapter:
 
         results = []
         for stage_name, targets in normalized_stages:
-            for joint, target in targets.items():
+            if len(targets) == 1:
+                joint, target = next(iter(targets.items()))
                 result = self.execute_joint(joint, target)
-                result["stage"] = stage_name
-                results.append(result)
-                if not result["ok"]:
-                    return _denied(
-                        name, "POSE_EXECUTION_FAILED", results=results
-                    )
+            else:
+                result = self.execute_arm_pose(stage_name, targets)
+            result["stage"] = stage_name
+            results.append(result)
+            if not result["ok"]:
+                return _denied(
+                    name, "POSE_EXECUTION_FAILED", results=results
+                )
         return {
             "ok": True,
             "authorized": True,

@@ -193,6 +193,44 @@ class AuthorityTests(unittest.TestCase):
             "PERMIT_ISSUER_INVALID",
         )
 
+    def test_combined_permits_are_consumed_atomically(self):
+        authority = self.authority()
+        shoulder = self.issue(authority, "shoulder", 0.5)
+        elbow = self.issue(authority, "elbow", 1.0)
+        requests = [
+            {
+                "permit": shoulder,
+                "action": "move_joint",
+                "joint": "shoulder",
+                "target": 0.5,
+            },
+            {
+                "permit": elbow,
+                "action": "move_joint",
+                "joint": "elbow",
+                "target": 1.1,
+            },
+        ]
+
+        denied = authority.authorize_many_once(
+            requests=requests,
+            current_state=state(NOW + 1),
+            now=NOW + 1,
+        )
+        self.assertEqual(denied["reason"], "PERMIT_MISMATCH")
+        self.assertFalse(shoulder.consumed)
+        self.assertFalse(elbow.consumed)
+
+        requests[1]["target"] = 1.0
+        allowed = authority.authorize_many_once(
+            requests=requests,
+            current_state=state(NOW + 1),
+            now=NOW + 1,
+        )
+        self.assertTrue(allowed["allowed"])
+        self.assertTrue(shoulder.consumed)
+        self.assertTrue(elbow.consumed)
+
     def test_audit_covers_the_authorization_lifecycle(self):
         authority = self.authority()
         permit = self.issue(authority)
@@ -218,6 +256,11 @@ class FakeTransport:
 
     def move_joint(self, joint, target):
         packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+        self.commands.append(packet)
+        return {"T": 102}
+
+    def move_arm_pose(self, targets):
+        packet = {"T": 102, **targets, "spd": 0, "acc": 0}
         self.commands.append(packet)
         return {"T": 102}
 
@@ -253,6 +296,48 @@ class SupervisorTests(unittest.TestCase):
                 )
             self.assertEqual(transport.commands, [])
             self.assertFalse(permit.consumed)
+
+    def test_arm_pose_consumes_permits_and_sends_one_combined_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            authority = LocalMotionAuthority(
+                audit_path=Path(directory) / "audit.jsonl"
+            )
+            targets = {"base": 0.0, "shoulder": 0.5}
+            permits = {
+                joint: authority.issue_permit(
+                    current_state=state(),
+                    joint=joint,
+                    target=target,
+                    now=NOW,
+                )
+                for joint, target in targets.items()
+            }
+            transport = FakeTransport()
+            supervisor = mechanical_supervisor.MechanicalSupervisor(
+                transport=transport,
+                authority=authority,
+            )
+
+            supervisor.move_arm_pose(
+                targets,
+                permits=permits,
+                current_state=state(NOW + 1),
+                now=NOW + 1,
+            )
+
+            self.assertEqual(
+                transport.commands,
+                [
+                    {
+                        "T": 102,
+                        "base": 0.0,
+                        "shoulder": 0.5,
+                        "spd": 0,
+                        "acc": 0,
+                    }
+                ],
+            )
+            self.assertTrue(all(permit.consumed for permit in permits.values()))
 
     def test_no_generic_command_api_or_automatic_setup_commands(self):
         supervisor = mechanical_supervisor.MechanicalSupervisor

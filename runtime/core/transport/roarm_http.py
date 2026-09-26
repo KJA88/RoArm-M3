@@ -74,6 +74,30 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             }
         )
 
+    def move_arm_pose(self, targets):
+        if not isinstance(targets, dict) or not targets:
+            raise RoArmHttpError("ARM_POSE_TARGETS_INVALID")
+        if set(targets) - PRODUCTION_JOINTS:
+            raise RoArmHttpError("ARM_POSE_JOINT_NOT_SUPPORTED")
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            for value in targets.values()
+        ):
+            raise RoArmHttpError("ARM_POSE_TARGET_INVALID")
+        packet = {
+            "T": 102,
+            **{
+                joint: float(targets[joint])
+                for joint in ("base", "shoulder", "elbow", "wrist")
+                if joint in targets
+            },
+            "spd": 0,
+            "acc": 0,
+        }
+        return self._get(packet)
+
 
 def normalize_feedback(feedback, *, base_url=DEFAULT_HTTP_BASE_URL, now=None):
     """Convert one valid T=1051 packet to production state evidence."""

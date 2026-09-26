@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 import json
+import math
 from pathlib import Path
 import requests
 import tempfile
@@ -26,6 +27,7 @@ from runtime.core.safety.existing_motions import (
 from runtime.core.safety.motion_authority import LocalMotionAuthority
 from runtime.core.safety.production_motion import ProductionMotionAdapter
 from runtime.core.transport.roarm_http import (
+    RoArmHttpError,
     RoArmProductionHttpTransport,
     normalize_feedback,
 )
@@ -62,6 +64,11 @@ class FakeTransport:
 
     def move_joint(self, joint, target):
         packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+        self.commands.append(packet)
+        return {"T": 102}
+
+    def move_arm_pose(self, targets):
+        packet = {"T": 102, **targets, "spd": 0, "acc": 0}
         self.commands.append(packet)
         return {"T": 102}
 
@@ -185,6 +192,14 @@ class HttpTransportTests(unittest.TestCase):
         feedback = transport.read_state()
         state = normalize_feedback(feedback, base_url=transport.base_url)
         transport.move_joint("base", 0.25)
+        transport.move_arm_pose(
+            {
+                "base": 0.0,
+                "shoulder": -0.8,
+                "elbow": 2.4,
+                "wrist": 0.0,
+            }
+        )
         transport.close()
 
         self.assertFalse(http.trust_env)
@@ -193,13 +208,25 @@ class HttpTransportTests(unittest.TestCase):
             [
                 {"T": 105},
                 {"T": 102, "base": 0.25, "spd": 0, "acc": 0},
+                {
+                    "T": 102,
+                    "base": 0.0,
+                    "shoulder": -0.8,
+                    "elbow": 2.4,
+                    "wrist": 0.0,
+                    "spd": 0,
+                    "acc": 0,
+                },
             ],
         )
         self.assertTrue(
             all(url.startswith("http://192.168.4.1/js?json=")
                 for url, _, _ in http.requests)
         )
-        self.assertEqual([request[2] for request in http.requests], [5.0, 5.0])
+        self.assertEqual(
+            [request[2] for request in http.requests],
+            [5.0, 5.0, 5.0],
+        )
         self.assertEqual(state["joints"]["base"], 0.25)
         self.assertEqual(state["transport"], "http")
         self.assertTrue(http.closed)
@@ -219,7 +246,26 @@ class HttpTransportTests(unittest.TestCase):
             for name in dir(RoArmProductionHttpTransport)
             if not name.startswith("_")
         }
-        self.assertEqual(public, {"close", "move_joint", "read_state"})
+        self.assertEqual(
+            public,
+            {"close", "move_arm_pose", "move_joint", "read_state"},
+        )
+
+    def test_arm_pose_transport_rejects_non_arm_and_nonfinite_targets(self):
+        transport = RoArmProductionHttpTransport(session=FakeHttpSession())
+        for targets in (
+            {"roll": 0.0},
+            {"gripper": 2.0},
+            {"hand": 2.0},
+            {"unknown": 0.0},
+            {"base": math.nan},
+            {"base": math.inf},
+            {},
+        ):
+            with self.subTest(targets=targets):
+                with self.assertRaises(RoArmHttpError):
+                    transport.move_arm_pose(targets)
+        self.assertEqual(transport._session.requests, [])
 
 
 class ProductionAdapterTests(unittest.TestCase):
@@ -281,6 +327,35 @@ class ProductionAdapterTests(unittest.TestCase):
         transport.move_joint.assert_called_once_with("elbow", 1.0)
         transport.close.assert_called_once_with()
 
+    def test_uncertain_combined_pose_is_not_retried(self):
+        transport = Mock()
+        transport.move_arm_pose.side_effect = requests.Timeout(
+            "simulated pose timeout"
+        )
+        targets = {"base": 0.0, "shoulder": 0.0}
+
+        result = self.adapter(
+            fresh_state(), lambda: transport
+        ).execute_named_pose("test_arm_only", targets)
+
+        self.assertEqual(result["reason"], "EXECUTION_FAILED")
+        self.assertTrue(result["permits_consumed"])
+        transport.move_arm_pose.assert_called_once_with(targets)
+        transport.close.assert_called_once_with()
+
+    def test_invalid_arm_pose_fails_before_transport_opens(self):
+        factory = Mock(side_effect=AssertionError("transport must stay closed"))
+        result = self.adapter(
+            fresh_state(), factory
+        ).execute_named_pose(
+            "invalid_arm_only",
+            {"shoulder": 0.0, "elbow": -0.4},
+        )
+
+        self.assertEqual(result["reason"], "TARGET_OUT_OF_LIMIT")
+        self.assertEqual(result["blocked_joint"], "elbow")
+        factory.assert_not_called()
+
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
         adapter = self.adapter(fresh_state(), lambda: transport)
@@ -309,12 +384,17 @@ class ProductionAdapterTests(unittest.TestCase):
             "mixed", {"shoulder": 0.0, "base": 0.0}
         )
         self.assertTrue(result["ok"])
-        self.assertEqual(len(transports), 2)
+        self.assertEqual(len(transports), 1)
         self.assertEqual(
-            [transport.commands[0] for transport in transports],
+            transports[0].commands,
             [
-                {"T": 102, "shoulder": 0.0, "spd": 0, "acc": 0},
-                {"T": 102, "base": 0.0, "spd": 0, "acc": 0},
+                {
+                    "T": 102,
+                    "shoulder": 0.0,
+                    "base": 0.0,
+                    "spd": 0,
+                    "acc": 0,
+                }
             ],
         )
 
@@ -338,18 +418,11 @@ class ProductionAdapterTests(unittest.TestCase):
                     fresh_state(), factory
                 ).execute_named_pose(action, targets)
                 self.assertTrue(result["ok"])
-                self.assertEqual(len(transports), 4)
+                self.assertTrue(result["permits_consumed"])
+                self.assertEqual(len(transports), 1)
                 self.assertEqual(
-                    [
-                        next(
-                            key
-                            for key in packet
-                            if key not in {"T", "spd", "acc"}
-                        )
-                        for transport in transports
-                        for packet in transport.commands
-                    ],
-                    ["base", "shoulder", "elbow", "wrist"],
+                    transports[0].commands,
+                    [{"T": 102, **targets, "spd": 0, "acc": 0}],
                 )
 
     def test_scan_arm_only_reuses_ready_then_exact_base_endpoint(self):
@@ -375,7 +448,11 @@ class ProductionAdapterTests(unittest.TestCase):
                     ),
                 )
                 self.assertTrue(result["ok"])
-                self.assertEqual(len(transports), 5)
+                self.assertEqual(len(transports), 2)
+                self.assertEqual(
+                    transports[0].commands,
+                    [{"T": 102, **READY_ARM_TARGETS, "spd": 0, "acc": 0}],
+                )
                 self.assertEqual(
                     transports[-1].commands[0],
                     {
