@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,48 +24,62 @@ class FakeTransport:
     def __init__(self, *, base=0.25, gripper=2.0):
         self.base = base
         self.gripper = gripper
-        self.writes = []
-        self.responses = []
+        self.calls = []
         self.fail_next_feedback = False
         self.closed = False
 
-    def reset_input_buffer(self):
-        self.responses.clear()
+    def read_state(self):
+        self.calls.append({"T": 105})
+        if self.fail_next_feedback:
+            self.fail_next_feedback = False
+            raise RuntimeError("simulated read failure")
+        return {"T": 1051, "b": self.base, "g": self.gripper}
 
-    def write(self, payload):
-        packet = json.loads(payload.decode("ascii"))
-        self.writes.append(packet)
-        if packet["T"] == 101:
-            if packet["joint"] == 1:
-                self.base = packet["rad"]
-            elif packet["joint"] == 6:
-                self.gripper = packet["rad"]
-            else:
-                raise AssertionError("unexpected joint")
-        elif packet["T"] == 105:
-            if self.fail_next_feedback:
-                self.fail_next_feedback = False
-                self.responses.append(RuntimeError("simulated read failure"))
-            else:
-                self.responses.append(
-                    json.dumps(
-                        {"T": 1051, "b": self.base, "g": self.gripper}
-                    ).encode("ascii")
-                )
+    def set_torque(self, enabled):
+        packet = {"T": 210, "cmd": 1 if enabled else 0}
+        self.calls.append(packet)
+        return {"T": 210}
 
-    def flush(self):
-        pass
+    def move_base(self, target):
+        packet = {
+            "T": 101,
+            "joint": 1,
+            "rad": float(target),
+            "spd": 50,
+            "acc": 0,
+        }
+        self.calls.append(packet)
+        self.base = float(target)
+        return {"T": 101}
 
-    def readline(self):
-        if not self.responses:
-            return b""
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
+    def move_gripper(self, target):
+        packet = {
+            "T": 101,
+            "joint": 6,
+            "rad": float(target),
+            "spd": 50,
+            "acc": 0,
+        }
+        self.calls.append(packet)
+        self.gripper = float(target)
+        return {"T": 101}
 
     def close(self):
         self.closed = True
+
+
+class FakeHttpResponse:
+    def __init__(self, packet):
+        self.payload = json.dumps(packet).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.payload
 
 
 class VerificationToolTests(unittest.TestCase):
@@ -76,7 +91,7 @@ class VerificationToolTests(unittest.TestCase):
         transport = transport or FakeTransport()
         log = tool.CalibrationLog(Path(self.temp.name))
         session = tool.BaseGripperVerification(
-            transport, log, timeout_s=0.01, settle_s=0
+            transport, log, settle_s=0
         )
         return session, transport
 
@@ -87,9 +102,74 @@ class VerificationToolTests(unittest.TestCase):
         self.assertEqual(state["gripper"], 2.0)
         return session, transport
 
+    def test_http_transport_reuses_proven_url_pattern(self):
+        requests = []
+
+        def fake_urlopen(url, timeout):
+            parsed = urlparse(url)
+            command = json.loads(parse_qs(parsed.query)["json"][0])
+            requests.append((parsed, command, timeout))
+            if command["T"] == 105:
+                return FakeHttpResponse(
+                    {"T": 1051, "b": 0.25, "g": 2.0}
+                )
+            return FakeHttpResponse({"T": command["T"]})
+
+        transport = tool.RoArmHttpTransport(
+            "http://192.168.4.1/",
+            urlopen_fn=fake_urlopen,
+        )
+        transport.read_state()
+        transport.set_torque(True)
+        transport.move_base(0.3)
+        transport.move_gripper(2.4)
+        transport.set_torque(False)
+
+        self.assertEqual(
+            [command for _, command, _ in requests],
+            [
+                {"T": 105},
+                {"T": 210, "cmd": 1},
+                {
+                    "T": 101,
+                    "joint": 1,
+                    "rad": 0.3,
+                    "spd": 50,
+                    "acc": 0,
+                },
+                {
+                    "T": 101,
+                    "joint": 6,
+                    "rad": 2.4,
+                    "spd": 50,
+                    "acc": 0,
+                },
+                {"T": 210, "cmd": 0},
+            ],
+        )
+        for parsed, _, timeout in requests:
+            self.assertEqual(parsed.scheme, "http")
+            self.assertEqual(parsed.netloc, "192.168.4.1")
+            self.assertEqual(parsed.path, "/js")
+            self.assertEqual(timeout, 1.5)
+
+    def test_tool_has_no_serial_or_generic_command_api(self):
+        source = TOOL_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("import serial", source)
+        self.assertNotIn("send_command", source)
+        public = {
+            name
+            for name in dir(tool.RoArmHttpTransport)
+            if not name.startswith("_")
+        }
+        self.assertEqual(
+            public,
+            {"move_base", "move_gripper", "read_state", "set_torque"},
+        )
+
     def test_startup_is_read_only_and_does_not_enable_torque(self):
         session, transport = self.started_session()
-        self.assertEqual(transport.writes, [{"T": 105}])
+        self.assertEqual(transport.calls, [{"T": 105}])
         self.assertFalse(session.torque_enabled)
         session.shutdown()
 
@@ -98,7 +178,7 @@ class VerificationToolTests(unittest.TestCase):
         session.enable_torque()
         result = session.jog_base(0.05)
 
-        motion = [packet for packet in transport.writes if packet["T"] == 101]
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
         self.assertEqual(
             motion,
             [{"T": 101, "joint": 1, "rad": 0.3, "spd": 50, "acc": 0}],
@@ -114,7 +194,7 @@ class VerificationToolTests(unittest.TestCase):
         session.enable_torque()
         result = session.move_gripper(2.4)
 
-        motion = [packet for packet in transport.writes if packet["T"] == 101]
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
         self.assertEqual(
             motion,
             [{"T": 101, "joint": 6, "rad": 2.4, "spd": 50, "acc": 0}],
@@ -131,7 +211,7 @@ class VerificationToolTests(unittest.TestCase):
                 with self.assertRaises(tool.VerificationError):
                     session.move_gripper(target)
         self.assertFalse(
-            any(packet["T"] == 101 for packet in transport.writes)
+            any(packet["T"] == 101 for packet in transport.calls)
         )
         session.shutdown()
 
@@ -146,7 +226,7 @@ class VerificationToolTests(unittest.TestCase):
             session.jog_base(0.01)
         self.assertTrue(session.motion_blocked)
         self.assertFalse(session.torque_enabled)
-        self.assertIn({"T": 210, "cmd": 0}, transport.writes)
+        self.assertIn({"T": 210, "cmd": 0}, transport.calls)
         with self.assertRaisesRegex(
             tool.VerificationError, "MOTION_BLOCKED_RECOVERY_REQUIRED"
         ):
@@ -164,11 +244,11 @@ class VerificationToolTests(unittest.TestCase):
             raise KeyboardInterrupt
 
         tool.run_interactive(session, input_fn=interrupt, output=lambda _: None)
-        self.assertIn({"T": 210, "cmd": 0}, transport.writes)
+        self.assertIn({"T": 210, "cmd": 0}, transport.calls)
         self.assertFalse(
             any(
                 packet == {"T": 210, "cmd": 1}
-                for packet in transport.writes
+                for packet in transport.calls
             )
         )
         self.assertTrue(transport.closed)

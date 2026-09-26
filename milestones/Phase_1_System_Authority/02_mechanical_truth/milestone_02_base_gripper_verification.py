@@ -3,18 +3,16 @@
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import time
+from urllib.parse import urlencode
+from urllib.request import urlopen
 from uuid import uuid4
 
 
-BAUD = 115200
-PREFERRED_PORT = (
-    "/dev/serial/by-id/"
-    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
-    "5c6dc8363f01f01180d7c1295c2a50c9-if00-port0"
-)
-FALLBACK_PORT = "/dev/ttyUSB0"
+HTTP_TIMEOUT = 1.5
+DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 LOG_DIR = (
     Path(__file__).resolve().parents[3]
     / "runtime/core/calibration/logs"
@@ -30,6 +28,61 @@ GRIPPER_PRESETS = {
 
 class VerificationError(RuntimeError):
     """Fail-closed verification error."""
+
+
+class RoArmHttpTransport:
+    """Fixed-purpose HTTP transport; no arbitrary command surface."""
+
+    def __init__(
+        self,
+        base_url=DEFAULT_HTTP_BASE_URL,
+        *,
+        timeout_s=HTTP_TIMEOUT,
+        urlopen_fn=urlopen,
+    ):
+        self.base_url = str(base_url).rstrip("/")
+        if not self.base_url:
+            raise ValueError("ROARM_HTTP_BASE_URL must not be empty")
+        self.timeout_s = float(timeout_s)
+        self._urlopen = urlopen_fn
+
+    def _get(self, packet):
+        command = json.dumps(packet, separators=(",", ":"))
+        query = urlencode({"json": command})
+        url = f"{self.base_url}/js?{query}"
+        with self._urlopen(url, timeout=self.timeout_s) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if not isinstance(result, dict):
+            raise VerificationError("HTTP_RESPONSE_NOT_OBJECT")
+        return result
+
+    def read_state(self):
+        return self._get({"T": 105})
+
+    def set_torque(self, enabled):
+        return self._get({"T": 210, "cmd": 1 if enabled else 0})
+
+    def move_base(self, target):
+        return self._get(
+            {
+                "T": 101,
+                "joint": 1,
+                "rad": float(target),
+                "spd": 50,
+                "acc": 0,
+            }
+        )
+
+    def move_gripper(self, target):
+        return self._get(
+            {
+                "T": 101,
+                "joint": 6,
+                "rad": float(target),
+                "spd": 50,
+                "acc": 0,
+            }
+        )
 
 
 def _utc_now():
@@ -86,23 +139,14 @@ class BaseGripperVerification:
         transport,
         log,
         *,
-        timeout_s=1.5,
         settle_s=0.5,
         sleep_fn=time.sleep,
     ):
         self.transport = transport
         self.log = log
-        self.timeout_s = float(timeout_s)
         self.settle_s = float(settle_s)
-        if (
-            not math.isfinite(self.timeout_s)
-            or self.timeout_s <= 0
-            or not math.isfinite(self.settle_s)
-            or self.settle_s < 0
-        ):
-            raise ValueError(
-                "timeout must be positive; settle time must be non-negative"
-            )
+        if not math.isfinite(self.settle_s) or self.settle_s < 0:
+            raise ValueError("settle time must be finite and non-negative")
         self.sleep_fn = sleep_fn
         self.started = False
         self.torque_enabled = False
@@ -117,62 +161,50 @@ class BaseGripperVerification:
         self.gripper_results = {}
         self._closed = False
 
-    def _write_fixed(self, packet, purpose):
+    def _fixed_request(self, packet, purpose, request):
         self.log.record("command", purpose=purpose, packet=packet)
-        payload = (
-            json.dumps(packet, separators=(",", ":")) + "\n"
-        ).encode("ascii")
-        self.transport.write(payload)
-        flush = getattr(self.transport, "flush", None)
-        if flush is not None:
-            flush()
+        response = request()
+        self.log.record(
+            "command_response", purpose=purpose, response=response
+        )
+        return response
 
     def _request_state(self, purpose):
-        reset = getattr(self.transport, "reset_input_buffer", None)
-        if reset is not None:
-            reset()
-        self._write_fixed({"T": 105}, purpose)
+        try:
+            packet = self._fixed_request(
+                {"T": 105},
+                purpose,
+                self.transport.read_state,
+            )
+        except Exception as exc:
+            self.log.record(
+                "readback_failed", purpose=purpose, error=str(exc)
+            )
+            raise VerificationError("T105_READBACK_FAILED") from exc
+        if packet.get("T") != 1051:
+            self.log.record(
+                "readback_failed",
+                purpose=purpose,
+                error="HTTP feedback did not contain T=1051",
+                packet=packet,
+            )
+            raise VerificationError("T105_READBACK_INVALID")
+        if not _finite(packet.get("b")) or not _finite(packet.get("g")):
+            self.log.record(
+                "readback_failed",
+                purpose=purpose,
+                error="T1051 missing finite b/g",
+                packet=packet,
+            )
+            raise VerificationError("T105_READBACK_INVALID")
 
-        deadline = time.monotonic() + self.timeout_s
-        while time.monotonic() < deadline:
-            try:
-                raw = self.transport.readline()
-            except Exception as exc:
-                self.log.record(
-                    "readback_failed", purpose=purpose, error=str(exc)
-                )
-                raise VerificationError("T105_READBACK_FAILED") from exc
-            if not raw:
-                continue
-            try:
-                packet = json.loads(
-                    raw.decode("utf-8", errors="strict").strip()
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if not isinstance(packet, dict) or packet.get("T") != 1051:
-                continue
-            if not _finite(packet.get("b")) or not _finite(packet.get("g")):
-                self.log.record(
-                    "readback_failed",
-                    purpose=purpose,
-                    error="T1051 missing finite b/g",
-                    packet=packet,
-                )
-                raise VerificationError("T105_READBACK_INVALID")
-
-            state = {
-                "base": float(packet["b"]),
-                "gripper": float(packet["g"]),
-                "raw": packet,
-            }
-            self.log.record("readback", purpose=purpose, state=state)
-            return state
-
-        self.log.record(
-            "readback_failed", purpose=purpose, error="T1051 timeout"
-        )
-        raise VerificationError("T105_READBACK_TIMEOUT")
+        state = {
+            "base": float(packet["b"]),
+            "gripper": float(packet["g"]),
+            "raw": packet,
+        }
+        self.log.record("readback", purpose=purpose, state=state)
+        return state
 
     def startup(self):
         if self.started:
@@ -187,13 +219,21 @@ class BaseGripperVerification:
         self._require_started()
         if self.motion_blocked:
             raise VerificationError("MOTION_BLOCKED_RECOVERY_REQUIRED")
-        self._write_fixed({"T": 210, "cmd": 1}, "enable_torque")
+        self._fixed_request(
+            {"T": 210, "cmd": 1},
+            "enable_torque",
+            lambda: self.transport.set_torque(True),
+        )
         self.torque_enabled = True
         self.log.record("torque_enabled")
 
     def disable_torque(self):
         try:
-            self._write_fixed({"T": 210, "cmd": 0}, "disable_torque")
+            self._fixed_request(
+                {"T": 210, "cmd": 0},
+                "disable_torque",
+                lambda: self.transport.set_torque(False),
+            )
             self.log.record("torque_disabled")
         finally:
             self.torque_enabled = False
@@ -230,16 +270,20 @@ class BaseGripperVerification:
         )
 
     def _move_isolated(self, *, joint_id, state_field, target, purpose):
-        self._write_fixed(
-            {
-                "T": 101,
-                "joint": joint_id,
-                "rad": float(target),
-                "spd": 50,
-                "acc": 0,
-            },
-            purpose,
-        )
+        packet = {
+            "T": 101,
+            "joint": joint_id,
+            "rad": float(target),
+            "spd": 50,
+            "acc": 0,
+        }
+        if joint_id == 1:
+            request = lambda: self.transport.move_base(target)
+        elif joint_id == 6:
+            request = lambda: self.transport.move_gripper(target)
+        else:
+            raise VerificationError("JOINT_NOT_ALLOWED")
+        self._fixed_request(packet, purpose, request)
         self.sleep_fn(self.settle_s)
         try:
             state = self._request_state(f"{purpose}_readback")
@@ -513,22 +557,17 @@ def run_interactive(session, input_fn=input, output=print):
         output(f"Log: {session.log.path}")
 
 
-def _open_serial():
-    import os
-    import serial
-
-    port = PREFERRED_PORT if os.path.exists(PREFERRED_PORT) else FALLBACK_PORT
-    transport = serial.Serial(
-        port, BAUD, timeout=0.2, dsrdtr=None
+def _open_http():
+    base_url = os.environ.get(
+        "ROARM_HTTP_BASE_URL",
+        DEFAULT_HTTP_BASE_URL,
     )
-    transport.setRTS(False)
-    transport.setDTR(False)
-    return transport
+    return RoArmHttpTransport(base_url)
 
 
 def main():
     log = CalibrationLog()
-    transport = _open_serial()
+    transport = _open_http()
     session = BaseGripperVerification(transport, log)
     run_interactive(session)
 
