@@ -241,6 +241,21 @@ READY is the default pre-pose.
 
 Another pre-pose may be used only when the task or test explicitly specifies it.
 
+The production skill ready_approach_center performs that default sequence for task_probe_center only:
+
+READY
+-> 3 second settle, the same dwell used by the demonstrated scan
+-> fresh T105
+-> one named T104
+-> 3 second settle
+-> delayed T105
+
+It does not accept arbitrary XYZ or an alternate pre-pose.
+
+milestone_05_task_probe_authority.py remains the independent diagnostic probe path. The operational skill does not replace it.
+
+A received T104 HTTP response is not position verification. The delayed T105 is recorded separately, and position_verified stays false because no target-match tolerance is claimed.
+
 An AI must not silently choose a different pre-pose.
 
 Z200 -> center and Z300 -> center are experimental approach-direction tests. They are not the normal default.

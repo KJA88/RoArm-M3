@@ -1107,6 +1107,142 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertEqual(result["hardware_action"], "NONE")
         factory.assert_not_called()
 
+    def test_ready_approach_center_uses_ready_then_one_t104_and_delayed_t105(self):
+        states = [task_fresh_state() for _ in range(4)]
+        states[2] = task_fresh_state()
+        states[2]["raw_feedback"] = dict(states[2]["raw_feedback"])
+        states[2]["raw_feedback"]["r"] = 0.003067962
+        states[2]["raw_feedback"]["g"] = 1.612213808
+        reader = Mock(side_effect=states)
+        transports = []
+        sleeps = []
+
+        def factory():
+            if transports:
+                self.assertGreaterEqual(reader.call_count, 3)
+            transport = FakeTransport()
+            transports.append(transport)
+            return transport
+
+        result = self.adapter(
+            reader, factory, sleep_fn=sleeps.append
+        ).execute_ready_approach("task_probe_center")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["pre_pose"], "READY")
+        self.assertEqual(result["sequence_status"], "COMPLETE")
+        self.assertEqual(result["target_name"], "task_probe_center")
+        self.assertEqual(result["ready_settled_state"], states[1])
+        self.assertEqual(result["final_delayed_t105"], states[3])
+        self.assertFalse(result["position_verified"])
+        self.assertFalse(result["http_response_is_position_verification"])
+        self.assertTrue(result["delayed_t105_recorded"])
+        self.assertFalse(result["task_motion"]["position_verified"])
+        self.assertEqual(
+            result["task_motion"]["hardware_action"],
+            "T104_RESPONSE_RECEIVED",
+        )
+        self.assertEqual(sleeps, [3.0, 3.0])
+        self.assertEqual(reader.call_count, 4)
+        self.assertEqual(len(transports), 2)
+        self.assertEqual(transports[0].commands[0]["T"], 102)
+        self.assertEqual(
+            transports[1].commands,
+            [
+                {
+                    "T": 104,
+                    "x": 250.0,
+                    "y": 0.0,
+                    "z": 250.0,
+                    "t": 0.0,
+                    "r": 0.003067962,
+                    "g": 1.612213808,
+                    "spd": 0.5,
+                }
+            ],
+        )
+        self.assertEqual(
+            ProductionMotionAdapter.execute_ready_approach.__code__.co_argcount,
+            2,
+        )
+
+    def test_ready_approach_rejects_other_targets_before_motion(self):
+        factory = Mock(side_effect=AssertionError("transport must stay closed"))
+        reader = Mock(side_effect=AssertionError("state must not be read"))
+        adapter = self.adapter(reader, factory)
+        for target in ("task_probe_x300", "task_probe_z200", {"x": 300.0}):
+            with self.subTest(target=target):
+                result = adapter.execute_ready_approach(target)
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["sequence_status"],
+                    "REJECTED_BEFORE_MOTION",
+                )
+                self.assertEqual(result["hardware_action"], "NONE")
+                self.assertIsNone(result["task_motion"])
+        factory.assert_not_called()
+        reader.assert_not_called()
+        self.assertFalse(
+            hasattr(ProductionMotionAdapter, "execute_task_space_target")
+        )
+
+    def test_ready_approach_stops_when_ready_fails_or_is_uncertain(self):
+        rejected_factory = Mock(
+            side_effect=AssertionError("transport must stay closed")
+        )
+        rejected = self.adapter(
+            fresh_state(fresh=False), rejected_factory
+        ).execute_ready_approach("task_probe_center")
+        self.assertEqual(rejected["sequence_status"], "STOPPED_READY_REJECTED")
+        self.assertIsNone(rejected["task_motion"])
+        rejected_factory.assert_not_called()
+
+        transport = Mock()
+        transport.move_arm_pose.side_effect = requests.Timeout(
+            "simulated ready timeout"
+        )
+        uncertain_factory = Mock(return_value=transport)
+        uncertain = self.adapter(
+            task_fresh_state(), uncertain_factory
+        ).execute_ready_approach("task_probe_center")
+        self.assertEqual(
+            uncertain["sequence_status"],
+            "STOPPED_READY_UNCERTAIN",
+        )
+        self.assertEqual(uncertain["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertIsNone(uncertain["task_motion"])
+        uncertain_factory.assert_called_once()
+        transport.move_named_task_probe.assert_not_called()
+
+    def test_ready_approach_stops_after_one_uncertain_t104(self):
+        ready_transport = FakeTransport()
+        task_transport = Mock()
+        task_transport.move_named_task_probe.side_effect = requests.Timeout(
+            "simulated T104 timeout"
+        )
+        factory = Mock(side_effect=[ready_transport, task_transport])
+        reader = Mock(side_effect=[task_fresh_state() for _ in range(3)])
+        sleeps = []
+
+        result = self.adapter(
+            reader, factory, sleep_fn=sleeps.append
+        ).execute_ready_approach("task_probe_center")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["sequence_status"], "STOPPED_TASK_UNCERTAIN")
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertEqual(
+            result["task_motion"]["hardware_action"],
+            "T104_OUTCOME_UNCERTAIN",
+        )
+        self.assertIsNone(result["final_delayed_t105"])
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(sleeps, [3.0])
+        self.assertEqual(reader.call_count, 3)
+        self.assertEqual(factory.call_count, 2)
+        task_transport.move_named_task_probe.assert_called_once()
+        task_transport.close.assert_called_once()
+
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
         adapter = self.adapter(fresh_state(), lambda: transport)
@@ -1387,6 +1523,13 @@ class DelegationTests(unittest.TestCase):
         task_probe.execute_task_probe_z200()
         task_probe.execute_task_probe_z300()
         task_probe.execute_task_probe_x300()
+
+        ready_approach = self.load_wrapper(
+            "milestone_03_ready_approach_center.py"
+        )
+        ready_approach._execute = Mock(return_value={"ok": False})
+        ready_approach.execute_ready_approach_center()
+        ready_approach._execute.assert_called_once_with()
         self.assertEqual(
             task_probe._execute.call_args_list,
             [

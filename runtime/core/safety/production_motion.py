@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 
 from .existing_motions import (
+    READY_ARM_TARGETS,
     SCAN_LEFT_BASE_TARGET,
     SCAN_RIGHT_BASE_TARGET,
 )
@@ -30,6 +31,8 @@ SCAN_ENDPOINTS = {
     "scan_left_arm_only": SCAN_LEFT_BASE_TARGET["base"],
     "scan_right_arm_only": SCAN_RIGHT_BASE_TARGET["base"],
 }
+READY_APPROACH_TARGET = "task_probe_center"
+READY_APPROACH_SETTLE_S = 3.0
 
 
 def _denied(action, reason, **details):
@@ -428,6 +431,158 @@ class ProductionMotionAdapter:
             if transport is not None:
                 transport.close()
 
+    def execute_ready_approach(self, target_name):
+        """Move through READY, then one authorized named Cartesian target."""
+        if target_name != READY_APPROACH_TARGET:
+            return _denied(
+                "ready_approach_center",
+                "READY_APPROACH_TARGET_NOT_AUTHORIZED",
+                pre_pose="READY",
+                sequence_status="REJECTED_BEFORE_MOTION",
+                requested_target=target_name,
+                ready_motion=None,
+                ready_settled_state=None,
+                target_name=target_name,
+                task_motion=None,
+                final_delayed_t105=None,
+                position_verified=False,
+                http_response_is_position_verification=False,
+                delayed_t105_recorded=False,
+            )
+
+        ready = self.execute_named_pose("ready_arm_only", READY_ARM_TARGETS)
+        if not ready["ok"]:
+            uncertain = ready.get("reason") == "EXECUTION_OUTCOME_UNCERTAIN"
+            return self._ready_approach_stopped(
+                sequence_status=(
+                    "STOPPED_READY_UNCERTAIN"
+                    if uncertain
+                    else "STOPPED_READY_REJECTED"
+                ),
+                authorized=uncertain,
+                reason=ready.get("reason"),
+                ready_motion=ready,
+                hardware_action=ready.get("hardware_action", "NONE"),
+            )
+
+        try:
+            self.sleep_fn(READY_APPROACH_SETTLE_S)
+        except Exception as exc:
+            return self._ready_approach_stopped(
+                sequence_status="STOPPED_READY_SETTLE_FAILED",
+                authorized=True,
+                reason="READY_SETTLE_FAILED",
+                ready_motion=ready,
+                hardware_action="T102_RESPONSE_RECEIVED",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+        ready_state, denied = self._state("ready_approach_center")
+        if denied:
+            return self._ready_approach_stopped(
+                sequence_status="STOPPED_READY_STATE_UNAVAILABLE",
+                authorized=True,
+                reason="READY_STATE_UNAVAILABLE",
+                ready_motion=ready,
+                hardware_action="T102_RESPONSE_RECEIVED",
+                state_error=denied,
+            )
+
+        task = self.execute_named_task_probe(READY_APPROACH_TARGET)
+        if not task["ok"]:
+            uncertain = task.get("reason") == "EXECUTION_OUTCOME_UNCERTAIN"
+            return self._ready_approach_stopped(
+                sequence_status=(
+                    "STOPPED_TASK_UNCERTAIN"
+                    if uncertain
+                    else "STOPPED_TASK_REJECTED"
+                ),
+                authorized=True,
+                reason=task.get("reason"),
+                ready_motion=ready,
+                ready_settled_state=ready_state,
+                task_motion=task,
+                hardware_action=task.get("hardware_action", "NONE"),
+            )
+
+        try:
+            self.sleep_fn(READY_APPROACH_SETTLE_S)
+        except Exception as exc:
+            return self._ready_approach_stopped(
+                sequence_status="STOPPED_FINAL_SETTLE_FAILED",
+                authorized=True,
+                reason="FINAL_SETTLE_FAILED",
+                ready_motion=ready,
+                ready_settled_state=ready_state,
+                task_motion=task,
+                hardware_action="T104_RESPONSE_RECEIVED",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+        final_state, denied = self._state("ready_approach_center")
+        if denied:
+            return self._ready_approach_stopped(
+                sequence_status="STOPPED_FINAL_STATE_UNAVAILABLE",
+                authorized=True,
+                reason="FINAL_STATE_UNAVAILABLE",
+                ready_motion=ready,
+                ready_settled_state=ready_state,
+                task_motion=task,
+                hardware_action="T104_RESPONSE_RECEIVED",
+                state_error=denied,
+            )
+
+        return {
+            "ok": True,
+            "authorized": True,
+            "action": "ready_approach_center",
+            "reason": "READY_APPROACH_COMPLETE",
+            "pre_pose": "READY",
+            "sequence_status": "COMPLETE",
+            "ready_motion": ready,
+            "ready_settled_state": ready_state,
+            "target_name": READY_APPROACH_TARGET,
+            "task_motion": task,
+            "final_delayed_t105": final_state,
+            "hardware_action": "READY_T102_AND_T104_RESPONSES_RECEIVED",
+            "position_verified": False,
+            "http_response_is_position_verification": False,
+            "delayed_t105_recorded": True,
+        }
+
+    def _ready_approach_stopped(
+        self,
+        *,
+        sequence_status,
+        authorized,
+        reason,
+        ready_motion,
+        hardware_action,
+        ready_settled_state=None,
+        task_motion=None,
+        **details,
+    ):
+        return {
+            "ok": False,
+            "authorized": authorized,
+            "action": "ready_approach_center",
+            "reason": reason,
+            "pre_pose": "READY",
+            "sequence_status": sequence_status,
+            "ready_motion": ready_motion,
+            "ready_settled_state": ready_settled_state,
+            "target_name": READY_APPROACH_TARGET,
+            "task_motion": task_motion,
+            "final_delayed_t105": None,
+            "hardware_action": hardware_action,
+            "position_verified": False,
+            "http_response_is_position_verification": False,
+            "delayed_t105_recorded": False,
+            **details,
+        }
+
     def execute_scan(self, name, ready_targets, endpoint):
         expected_endpoint = SCAN_ENDPOINTS.get(name)
         if (
@@ -689,6 +844,14 @@ def execute_task_probe_center():
     return execute_named_task_probe("task_probe_center")
 
 
+def execute_ready_approach(target_name):
+    return _DEFAULT_ADAPTER.execute_ready_approach(target_name)
+
+
+def execute_ready_approach_center():
+    return execute_ready_approach(READY_APPROACH_TARGET)
+
+
 def deny_unsupported(action, **details):
     return _DEFAULT_ADAPTER.unsupported(action, **details)
 
@@ -705,6 +868,8 @@ __all__ = [
     "execute_named_pose",
     "execute_named_sequence",
     "execute_named_task_probe",
+    "execute_ready_approach",
+    "execute_ready_approach_center",
     "execute_scan",
     "execute_task_probe_center",
     "inspect_gripper",
