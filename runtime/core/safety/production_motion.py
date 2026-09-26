@@ -1,5 +1,6 @@
 """Single production adapter from constrained intent to local execution."""
 import json
+import math
 import os
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from runtime.core.transport.roarm_http import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GRIPPER_MAP = REPO_ROOT / "runtime/core/calibration/gripper_map.json"
 ARM_ONLY_JOINTS = {"base", "shoulder", "elbow", "wrist"}
+ALL_STATE_JOINTS = ARM_ONLY_JOINTS | {"roll", "gripper"}
 
 
 def _denied(action, reason, **details):
@@ -28,6 +30,16 @@ def _denied(action, reason, **details):
         "hardware_action": "NONE",
         **details,
     }
+
+
+def _has_finite_joints(current_state, required):
+    joints = current_state.get("joints") if isinstance(current_state, dict) else None
+    return isinstance(joints, dict) and all(
+        isinstance(joints.get(joint), (int, float))
+        and not isinstance(joints.get(joint), bool)
+        and math.isfinite(joints[joint])
+        for joint in required
+    )
 
 
 def _read_state():
@@ -83,6 +95,8 @@ class ProductionMotionAdapter:
             return _denied(
                 action, exc.reason, joint=joint, target=target, checks=exc.checks
             )
+        if not _has_finite_joints(current_state, ALL_STATE_JOINTS):
+            return _denied(action, "PRESERVATION_STATE_INVALID")
 
         transport = None
         try:
@@ -125,8 +139,7 @@ class ProductionMotionAdapter:
     def execute_arm_pose(self, name, targets):
         if (
             not isinstance(targets, dict)
-            or not targets
-            or set(targets) - ARM_ONLY_JOINTS
+            or set(targets) != ARM_ONLY_JOINTS
         ):
             return _denied(name, "ARM_POSE_TARGETS_INVALID")
         current_state, denied = self._state(name)
@@ -148,6 +161,8 @@ class ProductionMotionAdapter:
                     blocked_joint=joint,
                     checks=checks,
                 )
+        if not _has_finite_joints(current_state, {"roll", "gripper"}):
+            return _denied(name, "PRESERVATION_STATE_INVALID")
 
         permits = {}
         try:

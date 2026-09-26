@@ -5,8 +5,28 @@ MechanicalSupervisor with local, one-shot motion authorization.
 Construction is inert. No connection, torque, mode, or motion command occurs
 until an execution method receives a valid permit from LocalMotionAuthority.
 """
+import math
 
 from runtime.core.safety import LocalMotionAuthority, MotionNotAuthorized
+
+
+ARM_JOINTS = {"base", "shoulder", "elbow", "wrist"}
+ALL_STATE_JOINTS = ARM_JOINTS | {"roll", "gripper"}
+
+
+def _finite_joint_state(current_state, required):
+    joints = current_state.get("joints") if isinstance(current_state, dict) else None
+    if not isinstance(joints, dict):
+        raise MotionNotAuthorized("PRESERVATION_STATE_INVALID")
+    values = {joint: joints.get(joint) for joint in required}
+    if any(
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        for value in values.values()
+    ):
+        raise MotionNotAuthorized("PRESERVATION_STATE_INVALID")
+    return values
 
 
 class MechanicalSupervisor:
@@ -25,6 +45,10 @@ class MechanicalSupervisor:
         now=None,
     ):
         """Execute one fixed-protocol joint move after local authorization."""
+        current_joints = _finite_joint_state(
+            current_state,
+            ALL_STATE_JOINTS,
+        )
         decision = self.authority.authorize_once(
             permit=permit,
             action="move_joint",
@@ -48,7 +72,11 @@ class MechanicalSupervisor:
 
         self.authority.record_move_start(permit)
         try:
-            response = self._transport.move_joint(joint, float(target))
+            response = self._transport.move_joint(
+                joint,
+                float(target),
+                current_joints=current_joints,
+            )
         except Exception as exc:
             self.authority.record_move_result(
                 permit,
@@ -69,8 +97,16 @@ class MechanicalSupervisor:
         now=None,
     ):
         """Execute one combined arm-only command after atomic authorization."""
-        if not isinstance(targets, dict) or not isinstance(permits, dict):
+        if (
+            not isinstance(targets, dict)
+            or set(targets) != ARM_JOINTS
+            or not isinstance(permits, dict)
+        ):
             raise MotionNotAuthorized("PERMIT_MISSING")
+        preserved = _finite_joint_state(
+            current_state,
+            {"roll", "gripper"},
+        )
         requests = [
             {
                 "permit": permits.get(joint),
@@ -103,7 +139,11 @@ class MechanicalSupervisor:
         for permit in consumed_permits:
             self.authority.record_move_start(permit)
         try:
-            response = self._transport.move_arm_pose(targets)
+            response = self._transport.move_arm_pose(
+                targets,
+                roll=preserved["roll"],
+                hand=preserved["gripper"],
+            )
         except Exception as exc:
             for permit in consumed_permits:
                 self.authority.record_move_result(

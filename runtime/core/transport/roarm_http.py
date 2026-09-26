@@ -9,6 +9,9 @@ import requests
 DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 HTTP_TIMEOUT_S = 5.0
 PRODUCTION_JOINTS = {"base", "shoulder", "elbow", "wrist"}
+ALL_STATE_JOINTS = {
+    "base", "shoulder", "elbow", "wrist", "roll", "gripper"
+}
 
 
 class RoArmHttpError(RuntimeError):
@@ -56,7 +59,7 @@ class RoArmHttpClient:
 class RoArmProductionHttpTransport(RoArmHttpClient):
     """HTTP execution surface limited to authorized production joints."""
 
-    def move_joint(self, joint, target):
+    def move_joint(self, joint, target, *, current_joints):
         if joint not in PRODUCTION_JOINTS:
             raise RoArmHttpError("PRODUCTION_JOINT_NOT_SUPPORTED")
         if (
@@ -65,25 +68,44 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             or not math.isfinite(target)
         ):
             raise RoArmHttpError("PRODUCTION_TARGET_INVALID")
+        if (
+            not isinstance(current_joints, dict)
+            or set(current_joints) != ALL_STATE_JOINTS
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                for value in current_joints.values()
+            )
+        ):
+            raise RoArmHttpError("PRESERVATION_STATE_INVALID")
+        full_targets = dict(current_joints)
+        full_targets[joint] = float(target)
         return self._get(
             {
                 "T": 102,
-                joint: float(target),
+                "base": float(full_targets["base"]),
+                "shoulder": float(full_targets["shoulder"]),
+                "elbow": float(full_targets["elbow"]),
+                "wrist": float(full_targets["wrist"]),
+                "roll": float(full_targets["roll"]),
+                "hand": float(full_targets["gripper"]),
                 "spd": 0,
                 "acc": 0,
             }
         )
 
-    def move_arm_pose(self, targets):
-        if not isinstance(targets, dict) or not targets:
+    def move_arm_pose(self, targets, *, roll, hand):
+        if (
+            not isinstance(targets, dict)
+            or set(targets) != PRODUCTION_JOINTS
+        ):
             raise RoArmHttpError("ARM_POSE_TARGETS_INVALID")
-        if set(targets) - PRODUCTION_JOINTS:
-            raise RoArmHttpError("ARM_POSE_JOINT_NOT_SUPPORTED")
         if any(
             not isinstance(value, (int, float))
             or isinstance(value, bool)
             or not math.isfinite(value)
-            for value in targets.values()
+            for value in (*targets.values(), roll, hand)
         ):
             raise RoArmHttpError("ARM_POSE_TARGET_INVALID")
         packet = {
@@ -93,6 +115,8 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
                 for joint in ("base", "shoulder", "elbow", "wrist")
                 if joint in targets
             },
+            "roll": float(roll),
+            "hand": float(hand),
             "spd": 0,
             "acc": 0,
         }

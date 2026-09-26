@@ -7,7 +7,7 @@ import requests
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from runtime.core.safety.existing_motions import (
@@ -44,10 +44,33 @@ def fresh_state(**changes):
         "connected": True,
         "fresh": True,
         "timestamp_unix": time.time(),
-        "joints": {"shoulder": 0.0, "elbow": 1.0, "wrist": 0.0},
+        "joints": {
+            "base": 0.25,
+            "shoulder": 0.0,
+            "elbow": 1.0,
+            "wrist": 0.0,
+            "roll": -0.004601942,
+            "gripper": 3.13545673,
+        },
     }
     value.update(changes)
     return value
+
+
+def full_t102(targets):
+    joints = dict(fresh_state()["joints"])
+    joints.update(targets)
+    return {
+        "T": 102,
+        "base": joints["base"],
+        "shoulder": joints["shoulder"],
+        "elbow": joints["elbow"],
+        "wrist": joints["wrist"],
+        "roll": joints["roll"],
+        "hand": joints["gripper"],
+        "spd": 0,
+        "acc": 0,
+    }
 
 
 def load_file(name, path):
@@ -62,13 +85,32 @@ class FakeTransport:
         self.commands = []
         self.closed = False
 
-    def move_joint(self, joint, target):
-        packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+    def move_joint(self, joint, target, *, current_joints):
+        values = dict(current_joints)
+        values[joint] = target
+        packet = {
+            "T": 102,
+            "base": values["base"],
+            "shoulder": values["shoulder"],
+            "elbow": values["elbow"],
+            "wrist": values["wrist"],
+            "roll": values["roll"],
+            "hand": values["gripper"],
+            "spd": 0,
+            "acc": 0,
+        }
         self.commands.append(packet)
         return {"T": 102}
 
-    def move_arm_pose(self, targets):
-        packet = {"T": 102, **targets, "spd": 0, "acc": 0}
+    def move_arm_pose(self, targets, *, roll, hand):
+        packet = {
+            "T": 102,
+            **targets,
+            "roll": roll,
+            "hand": hand,
+            "spd": 0,
+            "acc": 0,
+        }
         self.commands.append(packet)
         return {"T": 102}
 
@@ -176,7 +218,15 @@ class FakeHttpSession:
             raise self.error
         if command == {"T": 105}:
             return FakeHttpResponse(
-                {"T": 1051, "b": 0.25, "s": 0.0, "e": 1.0, "t": 0.0}
+                {
+                    "T": 1051,
+                    "b": 0.25,
+                    "s": 0.0,
+                    "e": 1.0,
+                    "t": 0.0,
+                    "r": -0.004601942,
+                    "g": 3.13545673,
+                }
             )
         return FakeHttpResponse({"T": command["T"]})
 
@@ -191,14 +241,20 @@ class HttpTransportTests(unittest.TestCase):
 
         feedback = transport.read_state()
         state = normalize_feedback(feedback, base_url=transport.base_url)
-        transport.move_joint("base", 0.25)
+        transport.move_joint(
+            "base",
+            0.25,
+            current_joints=state["joints"],
+        )
         transport.move_arm_pose(
             {
                 "base": 0.0,
                 "shoulder": -0.8,
                 "elbow": 2.4,
                 "wrist": 0.0,
-            }
+            },
+            roll=state["joints"]["roll"],
+            hand=state["joints"]["gripper"],
         )
         transport.close()
 
@@ -207,13 +263,25 @@ class HttpTransportTests(unittest.TestCase):
             [request[1] for request in http.requests],
             [
                 {"T": 105},
-                {"T": 102, "base": 0.25, "spd": 0, "acc": 0},
+                {
+                    "T": 102,
+                    "base": 0.25,
+                    "shoulder": 0.0,
+                    "elbow": 1.0,
+                    "wrist": 0.0,
+                    "roll": -0.004601942,
+                    "hand": 3.13545673,
+                    "spd": 0,
+                    "acc": 0,
+                },
                 {
                     "T": 102,
                     "base": 0.0,
                     "shoulder": -0.8,
                     "elbow": 2.4,
                     "wrist": 0.0,
+                    "roll": -0.004601942,
+                    "hand": 3.13545673,
                     "spd": 0,
                     "acc": 0,
                 },
@@ -236,7 +304,11 @@ class HttpTransportTests(unittest.TestCase):
         transport = RoArmProductionHttpTransport(session=http)
 
         with self.assertRaises(requests.Timeout):
-            transport.move_joint("elbow", 1.0)
+            transport.move_joint(
+                "elbow",
+                1.0,
+                current_joints=fresh_state()["joints"],
+            )
 
         self.assertEqual(len(http.requests), 1)
 
@@ -264,7 +336,15 @@ class HttpTransportTests(unittest.TestCase):
         ):
             with self.subTest(targets=targets):
                 with self.assertRaises(RoArmHttpError):
-                    transport.move_arm_pose(targets)
+                    transport.move_arm_pose(targets, roll=0.0, hand=2.0)
+        for roll, hand in ((math.nan, 2.0), (0.0, math.inf)):
+            with self.subTest(roll=roll, hand=hand):
+                with self.assertRaises(RoArmHttpError):
+                    transport.move_arm_pose(
+                        READY_ARM_TARGETS,
+                        roll=roll,
+                        hand=hand,
+                    )
         self.assertEqual(transport._session.requests, [])
 
 
@@ -292,7 +372,7 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertEqual(len(transport.commands), 1)
         self.assertEqual(
             transport.commands[0],
-            {"T": 102, "elbow": 1.2, "spd": 0, "acc": 0},
+            full_t102({"elbow": 1.2}),
         )
 
     def test_invalid_or_stale_state_never_opens_transport(self):
@@ -324,7 +404,11 @@ class ProductionAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["reason"], "EXECUTION_FAILED")
         self.assertTrue(result["permit_consumed"])
-        transport.move_joint.assert_called_once_with("elbow", 1.0)
+        transport.move_joint.assert_called_once_with(
+            "elbow",
+            1.0,
+            current_joints=ANY,
+        )
         transport.close.assert_called_once_with()
 
     def test_uncertain_combined_pose_is_not_retried(self):
@@ -332,7 +416,12 @@ class ProductionAdapterTests(unittest.TestCase):
         transport.move_arm_pose.side_effect = requests.Timeout(
             "simulated pose timeout"
         )
-        targets = {"base": 0.0, "shoulder": 0.0}
+        targets = {
+            "base": 0.0,
+            "shoulder": 0.0,
+            "elbow": 1.0,
+            "wrist": 0.0,
+        }
 
         result = self.adapter(
             fresh_state(), lambda: transport
@@ -340,7 +429,11 @@ class ProductionAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["reason"], "EXECUTION_FAILED")
         self.assertTrue(result["permits_consumed"])
-        transport.move_arm_pose.assert_called_once_with(targets)
+        transport.move_arm_pose.assert_called_once_with(
+            targets,
+            roll=-0.004601942,
+            hand=3.13545673,
+        )
         transport.close.assert_called_once_with()
 
     def test_invalid_arm_pose_fails_before_transport_opens(self):
@@ -349,12 +442,43 @@ class ProductionAdapterTests(unittest.TestCase):
             fresh_state(), factory
         ).execute_named_pose(
             "invalid_arm_only",
-            {"shoulder": 0.0, "elbow": -0.4},
+            {
+                "base": 0.0,
+                "shoulder": 0.0,
+                "elbow": -0.4,
+                "wrist": 0.0,
+            },
         )
 
         self.assertEqual(result["reason"], "TARGET_OUT_OF_LIMIT")
         self.assertEqual(result["blocked_joint"], "elbow")
         factory.assert_not_called()
+
+    def test_invalid_pose_preservation_state_fails_before_transport(self):
+        valid_joints = fresh_state()["joints"]
+        cases = []
+        for missing in ("roll", "gripper"):
+            joints = dict(valid_joints)
+            joints.pop(missing)
+            cases.append(joints)
+        for field in ("roll", "gripper"):
+            joints = dict(valid_joints)
+            joints[field] = math.nan
+            cases.append(joints)
+
+        for joints in cases:
+            with self.subTest(joints=joints):
+                factory = Mock(
+                    side_effect=AssertionError("transport must stay closed")
+                )
+                result = self.adapter(
+                    fresh_state(joints=joints), factory
+                ).execute_named_pose("ready_arm_only", READY_ARM_TARGETS)
+                self.assertEqual(
+                    result["reason"],
+                    "PRESERVATION_STATE_INVALID",
+                )
+                factory.assert_not_called()
 
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
@@ -368,7 +492,7 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(
             base_transport.commands[0],
-            {"T": 102, "base": 0.0, "spd": 0, "acc": 0},
+            full_t102({"base": 0.0}),
         )
 
     def test_named_pose_preflights_all_targets_before_execution(self):
@@ -380,22 +504,18 @@ class ProductionAdapterTests(unittest.TestCase):
             return transport
 
         adapter = self.adapter(fresh_state(), factory)
-        result = adapter.execute_named_pose(
-            "mixed", {"shoulder": 0.0, "base": 0.0}
-        )
+        targets = {
+            "base": 0.0,
+            "shoulder": 0.0,
+            "elbow": 1.0,
+            "wrist": 0.0,
+        }
+        result = adapter.execute_named_pose("mixed", targets)
         self.assertTrue(result["ok"])
         self.assertEqual(len(transports), 1)
         self.assertEqual(
             transports[0].commands,
-            [
-                {
-                    "T": 102,
-                    "shoulder": 0.0,
-                    "base": 0.0,
-                    "spd": 0,
-                    "acc": 0,
-                }
-            ],
+            [full_t102(targets)],
         )
 
     def test_ready_and_observe_arm_only_poses_are_authorized(self):
@@ -422,7 +542,7 @@ class ProductionAdapterTests(unittest.TestCase):
                 self.assertEqual(len(transports), 1)
                 self.assertEqual(
                     transports[0].commands,
-                    [{"T": 102, **targets, "spd": 0, "acc": 0}],
+                    [full_t102(targets)],
                 )
 
     def test_scan_arm_only_reuses_ready_then_exact_base_endpoint(self):
@@ -451,16 +571,11 @@ class ProductionAdapterTests(unittest.TestCase):
                 self.assertEqual(len(transports), 2)
                 self.assertEqual(
                     transports[0].commands,
-                    [{"T": 102, **READY_ARM_TARGETS, "spd": 0, "acc": 0}],
+                    [full_t102(READY_ARM_TARGETS)],
                 )
                 self.assertEqual(
                     transports[-1].commands[0],
-                    {
-                        "T": 102,
-                        "base": endpoint["base"],
-                        "spd": 0,
-                        "acc": 0,
-                    },
+                    full_t102(endpoint),
                 )
 
     def test_gripper_map_is_reported_but_not_activated(self):

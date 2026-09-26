@@ -28,7 +28,14 @@ def state(timestamp=NOW, **changes):
         "connected": True,
         "fresh": True,
         "timestamp_unix": timestamp,
-        "joints": {"shoulder": 0.0, "elbow": 1.0, "wrist": 0.0},
+        "joints": {
+            "base": 0.0,
+            "shoulder": 0.0,
+            "elbow": 1.0,
+            "wrist": 0.0,
+            "roll": -0.004601942,
+            "gripper": 3.13545673,
+        },
     }
     value.update(changes)
     return value
@@ -254,13 +261,32 @@ class FakeTransport:
         self.commands = []
         self.closed = False
 
-    def move_joint(self, joint, target):
-        packet = {"T": 102, joint: target, "spd": 0, "acc": 0}
+    def move_joint(self, joint, target, *, current_joints):
+        values = dict(current_joints)
+        values[joint] = target
+        packet = {
+            "T": 102,
+            "base": values["base"],
+            "shoulder": values["shoulder"],
+            "elbow": values["elbow"],
+            "wrist": values["wrist"],
+            "roll": values["roll"],
+            "hand": values["gripper"],
+            "spd": 0,
+            "acc": 0,
+        }
         self.commands.append(packet)
         return {"T": 102}
 
-    def move_arm_pose(self, targets):
-        packet = {"T": 102, **targets, "spd": 0, "acc": 0}
+    def move_arm_pose(self, targets, *, roll, hand):
+        packet = {
+            "T": 102,
+            **targets,
+            "roll": roll,
+            "hand": hand,
+            "spd": 0,
+            "acc": 0,
+        }
         self.commands.append(packet)
         return {"T": 102}
 
@@ -302,7 +328,12 @@ class SupervisorTests(unittest.TestCase):
             authority = LocalMotionAuthority(
                 audit_path=Path(directory) / "audit.jsonl"
             )
-            targets = {"base": 0.0, "shoulder": 0.5}
+            targets = {
+                "base": 0.0,
+                "shoulder": 0.5,
+                "elbow": 1.0,
+                "wrist": 0.0,
+            }
             permits = {
                 joint: authority.issue_permit(
                     current_state=state(),
@@ -332,6 +363,10 @@ class SupervisorTests(unittest.TestCase):
                         "T": 102,
                         "base": 0.0,
                         "shoulder": 0.5,
+                        "elbow": 1.0,
+                        "wrist": 0.0,
+                        "roll": -0.004601942,
+                        "hand": 3.13545673,
                         "spd": 0,
                         "acc": 0,
                     }
