@@ -87,15 +87,29 @@ All four outcomes are valid data.
 
 Protocol Scope
 
-Task-space commands are issued via SDK pose_ctrl()
+Historical diagnostic implementation
 
-Underlying UART protocol is observed, not assumed
+milestone_05_reachability.py issued task-space commands through SDK pose_ctrl().
 
-Any required initialization, delays, or mode changes are logged
+That script observed the underlying UART protocol. It is not the current production path.
 
-The Supervisor does not retry or compensate
+Current production implementation
 
-This milestone characterizes behavior, it does not enforce policy.
+Named task probes use HTTP only:
+
+GET http://192.168.4.1/js?json=<JSON command>
+
+Motion uses T:104.
+
+Fresh state and delayed settled verification use T:105, expecting T:1051.
+
+There is no UART or serial fallback.
+
+The HTTP body returned immediately by T:104 is command acceptance only. It is not settled-state verification.
+
+The supervisor does not retry or compensate.
+
+This milestone characterizes behavior. It does not enforce policy.
 
 Implementation Artifacts
 milestone_05_reachability.py
@@ -147,7 +161,10 @@ Points that might be solvable mathematically
 Used to detect clamping or silent correction
 
 How to Run Milestone 05
-Preconditions
+
+Historical UART diagnostic
+
+The original reachability script expected:
 
 Milestone 04 complete
 
@@ -161,10 +178,13 @@ Physical clearance around arm
 
 Human observer present
 
-Run From Repository Root
+Run that historical script from the repository root:
+
 cd ~/RoArm
 source ~/.venv/bin/activate
 python3 milestones/Phase_2_Task_Space/05_firmware_ik_validation/milestone_05_reachability.py
+
+Current named production probes are not run by that UART script.
 
 What You Should See
 During Execution
@@ -206,6 +226,52 @@ This file must contain, per test:
 
 
 This file is treated as ground truth for future phases.
+
+Default Operational Approach
+
+Normal SYZYGY arm motion uses this sequence:
+
+READY
+-> controlled approach
+-> target
+-> delayed T105 verification
+-> eventual vision correction
+
+READY is the default pre-pose.
+
+Another pre-pose may be used only when the task or test explicitly specifies it.
+
+An AI must not silently choose a different pre-pose.
+
+Z200 -> center and Z300 -> center are experimental approach-direction tests. They are not the normal default.
+
+When approach history matters, record:
+
+starting pose
+
+pre-pose
+
+approach direction
+
+target
+
+delayed settled T105
+
+The immediate T:104 response is not settled-state verification.
+
+Current measurements do not justify Cartesian compensation.
+
+Human / Owner Observations
+
+These observations are physical observations by the owner. They are not firmware readback measurements.
+
+Joints sometimes sag or settle under load.
+
+How a pose is approached matters.
+
+Approaching the same nominal pose from below can behave differently from approaching it from above.
+
+Many joint configurations can achieve the same nominal Z or Cartesian location.
 
 Definition of Done (Acceptance Criteria)
 

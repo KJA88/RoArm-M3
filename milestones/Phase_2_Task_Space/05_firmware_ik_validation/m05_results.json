@@ -156,5 +156,105 @@
         },
         "observed_behavior": "clamped",
         "notes": "Schema category means the arm moved but did not reach the requested XYZ. It is not evidence of a workspace clamp. Z errors are pose/configuration dependent: Z200 -5.6291 mm, Z250 -11.1335 mm, and Z300 -11.2096 mm. The previously suspected constant approximately 11.2 mm Z offset is not supported. Roll and gripper were preserved exactly. No compensation is applied."
+    },
+    {
+        "requested_pose": {
+            "name": "task_probe_center",
+            "x": 250.0,
+            "y": 0.0,
+            "z": 250.0,
+            "pitch": 0.0
+        },
+        "sequence": [
+            "task_probe_z200",
+            "task_probe_center"
+        ],
+        "starting_pose": "task_probe_z200",
+        "pre_pose": "task_probe_z200",
+        "approach_direction": "from_below",
+        "test_condition": "experimental_approach_direction",
+        "default_operation": false,
+        "settled_delayed_t105": {
+            "T": 1051,
+            "x": 250.3220502,
+            "y": -0.383989517,
+            "z": 238.3865744,
+            "tit": 0.035281558,
+            "b": -0.001533981,
+            "s": -0.391165101,
+            "e": 1.768679848,
+            "t": 0.228563137,
+            "r": 0.003067962,
+            "g": 1.612213808,
+            "tB": 19,
+            "tS": 0,
+            "tE": 115,
+            "tT": 0,
+            "tR": 0
+        },
+        "errors": {
+            "x_mm": 0.3220502,
+            "y_mm": -0.383989517,
+            "z_mm": -11.6134256,
+            "pitch_rad": 0.035281558,
+            "roll_preserved_exactly": true,
+            "gripper_preserved_exactly": true
+        },
+        "observed_behavior": "clamped",
+        "notes": "Experimental approach-direction condition, not the default READY approach. The center target was intentionally approached from below after task_probe_z200. Schema category means the arm moved but did not reach the requested XYZ. It is not evidence of a workspace clamp. Roll and gripper were preserved exactly. No compensation is applied."
+    },
+    {
+        "requested_pose": {
+            "name": "task_probe_x300",
+            "x": 300.0,
+            "y": 0.0,
+            "z": 250.0,
+            "pitch": 0.0
+        },
+        "sequence": [
+            "task_probe_z200",
+            "task_probe_center_approached_from_below",
+            "task_probe_x300"
+        ],
+        "starting_pose": "task_probe_z200",
+        "pre_pose": "task_probe_center_approached_from_below",
+        "approach_direction": "horizontal",
+        "test_condition": "orthogonal_x_after_experimental_center_approach",
+        "default_operation": false,
+        "settled_delayed_t105": {
+            "T": 1051,
+            "x": 300.7399995,
+            "y": -0.461329743,
+            "z": 234.9144945,
+            "tit": 0.053689328,
+            "b": -0.001533981,
+            "s": -0.181009733,
+            "e": 1.61681575,
+            "t": 0.188679637,
+            "r": 0.003067962,
+            "g": 1.612213808,
+            "tB": 19,
+            "tS": 23,
+            "tE": 111,
+            "tT": 47,
+            "tR": 0
+        },
+        "errors": {
+            "x_mm": 0.7399995,
+            "y_mm": -0.461329743,
+            "z_mm": -15.0855055,
+            "pitch_rad": 0.053689328,
+            "roll_preserved_exactly": true,
+            "gripper_preserved_exactly": true
+        },
+        "relative_to_immediately_preceding_center": {
+            "commanded_delta_x_mm": 50.0,
+            "observed_delta_x_mm": 50.4179493,
+            "observed_delta_y_mm": -0.077340226,
+            "observed_delta_z_mm": -3.4720799,
+            "observed_delta_pitch_rad": 0.01840777
+        },
+        "observed_behavior": "clamped",
+        "notes": "Schema category means the arm moved but did not reach the requested XYZ. It is not evidence of a workspace clamp. Horizontal X displacement tracked closely: commanded +50.000 mm, observed +50.4179493 mm. Extending outward also changed reported Z by -3.4720799 mm and pitch by +0.018407770 rad. Cartesian error is configuration and path dependent. Possible contributors include mechanical sag or compliance, backlash, gravity loading, servo behavior, IK branch or configuration, and approach history. No individual cause is proven. Roll and gripper were preserved exactly. No global XYZ compensation is applied."
     }
 ]
