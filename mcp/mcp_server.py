@@ -6,8 +6,7 @@ RoArm-M3 MCP Server
 Current architecture:
 
 - Existing state and validation tools remain read-only/dry-run.
-- Approved live motion is routed through an explicit motion-authority layer.
-- The only currently approved live-motion routine is run_lissajous().
+- Motion intents route through the local one-shot production authority.
 - Arbitrary hardware motion is not exposed.
 
 Historical Phase 1 read-only language describes the earlier development
@@ -15,7 +14,6 @@ state and is not the current global server policy.
 """
 
 import json
-import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -36,11 +34,7 @@ JOINT_LIMITS_FILE = (
     / "runtime/core/calibration/joint_limits.json"
 )
 
-LISSAJOUS_SCRIPT = (
-    REPO_ROOT
-    / "lessons/01_trajectory_and_gripper/demo_lissajous.py"
-)
-
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(MILESTONE_03_DIR))
 
 from milestone_03_state_reader import get_feedback
@@ -318,22 +312,9 @@ def validate_roarm_state_aware_joint_proposal(
 @mcp.tool()
 def run_lissajous() -> dict:
     """
-    Execute the approved RoArm 3D Lissajous figure-8 routine.
+    Request the legacy Lissajous action through production authority.
 
-    LIVE HARDWARE ACTION.
-
-    This tool does not directly own motion authority.
-
-    It delegates authorization and execution to the repository's
-    milestone_03_motion_authority.py layer.
-
-    Required before execution:
-    - connected/fresh RoArm state
-    - locally armed one-shot authorization
-    - exact script SHA-256 match
-    - exclusive motion lock
-
-    Remote AI clients cannot create the local authorization.
+    The adapter denies it until a verified trajectory policy exists.
     """
 
     return execute_lissajous()
@@ -342,10 +323,7 @@ def run_lissajous() -> dict:
 @mcp.tool()
 def scan_left() -> dict:
     """
-    Move to Ready, then perform the fixed smooth left camera scan.
-
-    Requires the operator to first run arm_scan_left.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    Request the fixed scan-left pose through local production authority.
     """
     return execute_scan_left()
 
@@ -353,10 +331,7 @@ def scan_left() -> dict:
 @mcp.tool()
 def scan_right() -> dict:
     """
-    Move to Ready, then perform the fixed smooth right camera scan.
-
-    Requires the operator to first run arm_scan_right.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    Request the fixed scan-right pose through local production authority.
     """
     return execute_scan_right()
 
@@ -364,10 +339,7 @@ def scan_right() -> dict:
 @mcp.tool()
 def move_observe_center() -> dict:
     """
-    Move the RoArm to the fixed human-taught Observe Center pose.
-
-    Requires the operator to first run arm_observe_center.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    Request the fixed Observe Center pose through local production authority.
     """
     return execute_observe_center()
 
@@ -375,10 +347,7 @@ def move_observe_center() -> dict:
 @mcp.tool()
 def move_observe_right() -> dict:
     """
-    Move the RoArm to the fixed human-taught Observe Right pose.
-
-    Requires the operator to first run arm_observe_right.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    Request the fixed Observe Right pose through local production authority.
     """
     return execute_observe_right()
 
@@ -386,10 +355,7 @@ def move_observe_right() -> dict:
 @mcp.tool()
 def move_observe_left() -> dict:
     """
-    Move the RoArm to the fixed human-taught Observe Left pose.
-
-    Requires the operator to first run arm_observe_left.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
+    Request the fixed Observe Left pose through local production authority.
     """
     return execute_observe_left()
 
@@ -397,14 +363,7 @@ def move_observe_left() -> dict:
 @mcp.tool()
 def move_ready() -> dict:
     """
-    Move the RoArm to the fixed human-taught Ready pose.
-
-    LIVE HARDWARE ACTION.
-
-    Requires the operator to first run arm_ready.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
-
-    No arbitrary joint values or serial commands are accepted.
+    Request the fixed Ready pose through local production authority.
     """
     return execute_ready()
 
@@ -412,14 +371,7 @@ def move_ready() -> dict:
 @mcp.tool()
 def move_home() -> dict:
     """
-    Move the RoArm to the manufacturer's fixed INIT/Home position.
-
-    LIVE HARDWARE ACTION.
-
-    Requires the operator to first run arm_home.py locally on the
-    Raspberry Pi. Authorization is one-use and expires after 120 seconds.
-
-    No joint values or arbitrary serial commands are accepted.
+    Request Home through authority; denied until its policy is verified.
     """
     return execute_home()
 
@@ -427,15 +379,7 @@ def move_home() -> dict:
 @mcp.tool()
 def move_to_candle() -> dict:
     """
-    Move the RoArm to the approved fixed Candle/home pose.
-
-    LIVE HARDWARE ACTION.
-
-    Requires the operator to first run roarm-arm-candle locally
-    on the Raspberry Pi. Authorization is one-use and expires
-    after 120 seconds.
-
-    No arbitrary joint values are accepted by this tool.
+    Request the fixed Candle pose through local production authority.
     """
 
     return execute_candle()
@@ -456,16 +400,8 @@ def move_constrained_joint(
     - elbow
     - wrist
 
-    The request passes through the repository's state-aware validator
-    and constrained joint-motion authority.
-
-    Existing human-verified Milestone 02 limits are authoritative.
-
-    Requires a local one-shot authorization created by the operator
-    with roarm-arm-joints.
-
-    This tool cannot move base, roll, or gripper and cannot send
-    multiple joint targets in one call.
+    The local adapter checks fresh state, verified limits, and an exact
+    short-lived one-shot permit before execution.
     """
 
     return execute_constrained_joint_move(
@@ -477,9 +413,7 @@ def move_constrained_joint(
 @mcp.tool()
 def set_gripper(position: str) -> dict:
     """
-    Move the RoArm gripper to one named, pre-approved position.
-
-    LIVE HARDWARE ACTION.
+    Request one named gripper position.
 
     Allowed values:
     - open
@@ -489,21 +423,8 @@ def set_gripper(position: str) -> dict:
 
     Arbitrary numeric gripper targets are not accepted.
 
-    Preset values come from the authoritative human-verified
-    Milestone 02 gripper calibration map.
-
-    Execution is delegated to
-    milestone_03_gripper_motion_authority.py.
-
-    Requires:
-    - connected/fresh controller state
-    - local short-lived one-shot gripper authorization
-    - authority-file SHA-256 match
-    - shared exclusive RoArm motion lock
-
-    Hardware motion uses T:101 direct-joint control on Joint 6 only.
-
-    Remote AI clients cannot create the local authorization.
+    The existing human-verified calibration map is reported, but execution
+    remains denied pending explicit integration into the safety policy.
     """
 
     return execute_gripper_position(position)

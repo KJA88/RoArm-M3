@@ -1,65 +1,52 @@
 #!/usr/bin/env python3
+"""Daily-use CLI routed through the production one-shot authority."""
 import argparse
 import json
-import time
-import serial
+from pathlib import Path
+import sys
 
-def send_cmd(ser, cmd_dict):
-    msg = json.dumps(cmd_dict) + "\n"
-    ser.write(msg.encode('utf-8'))
-    print(f"→ Sent: {msg.strip()}")
 
-def main():
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from runtime.core.safety.production_motion import (  # noqa: E402
+    deny_unsupported,
+    execute_joint,
+)
+
+
+def request_joint(joint, target):
+    return execute_joint(joint, target)
+
+
+def request_xyz(x, y, z):
+    return deny_unsupported(
+        "goto_xyz",
+        reason="TASK_SPACE_POLICY_UNVERIFIED",
+        requested_target={"x": x, "y": y, "z": z},
+    )
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser()
-    # Adding subparsers back so your 'rogo' alias works
-    subparsers = parser.add_subparsers(dest="command")
-    goto_parser = subparsers.add_parser('goto_xyz')
-    
-    # Coordinates
-    goto_parser.add_argument('x', type=float)
-    goto_parser.add_argument('y', type=float)
-    goto_parser.add_argument('z', type=float)
-    
-    # Options
-    parser.add_argument('--port', default='/dev/ttyUSB0')
-    parser.add_argument('--spd', type=int, default=100)
-    parser.add_argument('--acc', type=int, default=50)
-    
-    args = parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    try:
-        # Standard Waveshare Setup [cite: 31, 35]
-        ser = serial.Serial(args.port, baudrate=115200, timeout=1, dsrdtr=None)
-        ser.setRTS(False)
-        ser.setDTR(False)
-        time.sleep(0.3)
+    joint_parser = subparsers.add_parser("joint")
+    joint_parser.add_argument("joint", choices=("shoulder", "elbow", "wrist"))
+    joint_parser.add_argument("target", type=float)
 
-        # 1. Torque ON (CMD_TORQUE_CTRL) 
-        send_cmd(ser, {"T": 210, "cmd": 1})
-        time.sleep(0.1)
+    xyz_parser = subparsers.add_parser("goto_xyz")
+    xyz_parser.add_argument("x", type=float)
+    xyz_parser.add_argument("y", type=float)
+    xyz_parser.add_argument("z", type=float)
 
-        # 2. Move using the Wiki's IK format (T:102) 
-        # Firmware handles the IK solution internally [cite: 66]
-        move_cmd = {
-            "T": 102,
-            "x": args.x,
-            "y": args.y,
-            "z": args.z,
-            "spd": args.spd,
-            "acc": args.acc
-        }
-        
-        send_cmd(ser, move_cmd)
+    args = parser.parse_args(argv)
+    if args.command == "joint":
+        result = request_joint(args.joint, args.target)
+    else:
+        result = request_xyz(args.x, args.y, args.z)
+    print(json.dumps(result, separators=(",", ":")))
+    return 0 if result.get("ok") else 1
 
-        # 3. Get Feedback (T:105) [cite: 37, 46]
-        time.sleep(2.0)
-        send_cmd(ser, {"T": 105})
-        fb = ser.readline().decode('utf-8', errors='ignore').strip()
-        print(f"Arm Feedback: {fb}")
-
-        ser.close()
-    except Exception as e:
-        print(f"Error: {e}")
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
