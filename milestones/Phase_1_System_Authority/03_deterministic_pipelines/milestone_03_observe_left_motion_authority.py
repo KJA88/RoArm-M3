@@ -1,16 +1,13 @@
 """Compatibility wrapper for the physically verified Observe Left pose."""
+from runtime.core.safety.existing_motions import (
+    OBSERVE_LEFT_ARM_TARGETS,
+    OBSERVE_LEFT_TARGETS,
+)
 from runtime.core.safety.production_motion import execute_named_pose
 
 
-# Human-taught physical values are retained exactly.
-TARGETS = {
-    "base": 1.610679827,
-    "shoulder": -0.832951568,
-    "elbow": 2.411417799,
-    "wrist": 0.006135923,
-    "roll": 0.0,
-    "hand": 3.152330519,
-}
+TARGETS = OBSERVE_LEFT_TARGETS
+ARM_ONLY_TARGETS = OBSERVE_LEFT_ARM_TARGETS
 
 
 def arm_observe_left():
@@ -18,4 +15,4 @@ def arm_observe_left():
 
 
 def execute_observe_left():
-    return execute_named_pose("observe_left", TARGETS)
+    return execute_named_pose("observe_left_arm_only", ARM_ONLY_TARGETS)

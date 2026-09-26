@@ -1,16 +1,13 @@
 """Compatibility wrapper for the physically verified scan-right sequence."""
+from runtime.core.safety.existing_motions import (
+    READY_ARM_TARGETS,
+    READY_TARGETS,
+    SCAN_RIGHT_BASE_TARGET,
+)
 from runtime.core.safety.production_motion import execute_named_sequence
 
 
-READY_TARGETS = {
-    "base": 0.001533981,
-    "shoulder": -0.832951568,
-    "elbow": 2.399145952,
-    "wrist": 0.004601942,
-    "roll": 0.0,
-    "hand": 3.163068385,
-}
-RIGHT_BASE_TARGET = {"base": -1.578466231}
+RIGHT_BASE_TARGET = SCAN_RIGHT_BASE_TARGET
 
 
 def arm_scan_right():
@@ -19,6 +16,9 @@ def arm_scan_right():
 
 def execute_scan_right():
     return execute_named_sequence(
-        "scan_right",
-        (("ready", READY_TARGETS), ("scan_right", RIGHT_BASE_TARGET)),
+        "scan_right_arm_only",
+        (
+            ("ready_arm_only", READY_ARM_TARGETS),
+            ("scan_right", RIGHT_BASE_TARGET),
+        ),
     )

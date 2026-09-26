@@ -73,7 +73,9 @@ class PermitDecisionTests(unittest.TestCase):
                     )
 
     def test_base_verified_operational_bounds_are_inclusive(self):
-        for target in (-1.57, 1.60):
+        minimum = -1.578466231
+        maximum = 1.610679827
+        for target in (minimum, maximum):
             with self.subTest(target=target):
                 result = evaluate("base", target)
                 self.assertTrue(result["allowed"])
@@ -81,7 +83,10 @@ class PermitDecisionTests(unittest.TestCase):
                     result["checks"]["verified_operational_bounds"]["kind"],
                     "operational_not_mechanical",
                 )
-        for target in (-1.570001, 1.600001):
+        for target in (
+            math.nextafter(minimum, -math.inf),
+            math.nextafter(maximum, math.inf),
+        ):
             with self.subTest(target=target):
                 self.assertEqual(
                     evaluate("base", target)["reason"],

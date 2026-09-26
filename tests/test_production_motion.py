@@ -9,6 +9,20 @@ import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
+from runtime.core.safety.existing_motions import (
+    CANDLE_ARM_TARGETS,
+    CANDLE_GRIPPER_EVIDENCE,
+    EXISTING_MOTION_INVENTORY,
+    OBSERVE_CENTER_ARM_TARGETS,
+    OBSERVE_LEFT_ARM_TARGETS,
+    OBSERVE_RIGHT_ARM_TARGETS,
+    RANDOM_HISTORICAL_TEST_TARGETS,
+    READY_ARM_TARGETS,
+    READY_TARGETS,
+    REFERENCE_DH_TARGETS,
+    SCAN_LEFT_BASE_TARGET,
+    SCAN_RIGHT_BASE_TARGET,
+)
 from runtime.core.safety.motion_authority import LocalMotionAuthority
 from runtime.core.safety.production_motion import ProductionMotionAdapter
 from runtime.core.transport.roarm_http import (
@@ -53,6 +67,84 @@ class FakeTransport:
 
     def close(self):
         self.closed = True
+
+
+class ExistingMotionInventoryTests(unittest.TestCase):
+    def test_historical_pose_evidence_is_preserved_without_authorization(self):
+        self.assertEqual(
+            REFERENCE_DH_TARGETS,
+            {
+                "base": 0.0,
+                "shoulder": 1.5,
+                "elbow": 0.0,
+                "wrist": 0.0,
+                "roll": 0.0,
+                "hand": 1.0,
+            },
+        )
+        self.assertEqual(
+            RANDOM_HISTORICAL_TEST_TARGETS,
+            {
+                "base": 0.5,
+                "shoulder": 1.1,
+                "elbow": -0.4,
+                "wrist": 0.3,
+                "roll": 0.0,
+                "hand": 1.0,
+            },
+        )
+        self.assertEqual(
+            EXISTING_MOTION_INVENTORY["reference_dh"]["production_status"],
+            "BLOCKED",
+        )
+        self.assertEqual(
+            EXISTING_MOTION_INVENTORY["random_historical_test"][
+                "production_status"
+            ],
+            "BLOCKED",
+        )
+
+    def test_candle_conflict_remains_unresolved_and_arm_only(self):
+        self.assertEqual(CANDLE_GRIPPER_EVIDENCE, (1.49, 1.0))
+        self.assertNotIn("hand", CANDLE_ARM_TARGETS)
+        candle = EXISTING_MOTION_INVENTORY["candle"]
+        self.assertEqual(candle["gripper_resolution"], "UNRESOLVED")
+        self.assertEqual(candle["production_status"], "ARM_TARGETS_ONLY")
+
+    def test_ready_strong_evidence_is_preserved_exactly(self):
+        self.assertEqual(
+            READY_TARGETS,
+            {
+                "base": 0.001533981,
+                "shoulder": -0.832951568,
+                "elbow": 2.399145952,
+                "wrist": 0.004601942,
+                "roll": 0.0,
+                "hand": 3.163068385,
+            },
+        )
+        self.assertEqual(
+            EXISTING_MOTION_INVENTORY["ready"]["evidence"],
+            "physically_used_strong",
+        )
+        self.assertEqual(
+            set(READY_ARM_TARGETS),
+            {"base", "shoulder", "elbow", "wrist"},
+        )
+
+    def test_observe_arm_only_targets_preserve_roll_and_gripper(self):
+        for targets in (
+            OBSERVE_LEFT_ARM_TARGETS,
+            OBSERVE_CENTER_ARM_TARGETS,
+            OBSERVE_RIGHT_ARM_TARGETS,
+        ):
+            with self.subTest(targets=targets):
+                self.assertEqual(
+                    set(targets),
+                    {"base", "shoulder", "elbow", "wrist"},
+                )
+                self.assertNotIn("roll", targets)
+                self.assertNotIn("hand", targets)
 
 
 class FakeHttpResponse:
@@ -226,6 +318,74 @@ class ProductionAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_ready_and_observe_arm_only_poses_are_authorized(self):
+        cases = (
+            ("ready_arm_only", READY_ARM_TARGETS),
+            ("observe_left_arm_only", OBSERVE_LEFT_ARM_TARGETS),
+            ("observe_center_arm_only", OBSERVE_CENTER_ARM_TARGETS),
+            ("observe_right_arm_only", OBSERVE_RIGHT_ARM_TARGETS),
+        )
+        for action, targets in cases:
+            with self.subTest(action=action):
+                transports = []
+
+                def factory():
+                    transport = FakeTransport()
+                    transports.append(transport)
+                    return transport
+
+                result = self.adapter(
+                    fresh_state(), factory
+                ).execute_named_pose(action, targets)
+                self.assertTrue(result["ok"])
+                self.assertEqual(len(transports), 4)
+                self.assertEqual(
+                    [
+                        next(
+                            key
+                            for key in packet
+                            if key not in {"T", "spd", "acc"}
+                        )
+                        for transport in transports
+                        for packet in transport.commands
+                    ],
+                    ["base", "shoulder", "elbow", "wrist"],
+                )
+
+    def test_scan_arm_only_reuses_ready_then_exact_base_endpoint(self):
+        for action, endpoint in (
+            ("scan_left_arm_only", SCAN_LEFT_BASE_TARGET),
+            ("scan_right_arm_only", SCAN_RIGHT_BASE_TARGET),
+        ):
+            with self.subTest(action=action):
+                transports = []
+
+                def factory():
+                    transport = FakeTransport()
+                    transports.append(transport)
+                    return transport
+
+                result = self.adapter(
+                    fresh_state(), factory
+                ).execute_named_sequence(
+                    action,
+                    (
+                        ("ready_arm_only", READY_ARM_TARGETS),
+                        ("scan_endpoint", endpoint),
+                    ),
+                )
+                self.assertTrue(result["ok"])
+                self.assertEqual(len(transports), 5)
+                self.assertEqual(
+                    transports[-1].commands[0],
+                    {
+                        "T": 102,
+                        "base": endpoint["base"],
+                        "spd": 0,
+                        "acc": 0,
+                    },
+                )
+
     def test_gripper_map_is_reported_but_not_activated(self):
         result = self.adapter(fresh_state(), Mock()).gripper_finding("open")
         self.assertEqual(result["reason"], "GRIPPER_POLICY_REVIEW_REQUIRED")
@@ -254,32 +414,52 @@ class DelegationTests(unittest.TestCase):
 
     def test_named_compatibility_wrappers_delegate(self):
         cases = [
-            ("milestone_03_ready_motion_authority.py", "execute_ready"),
+            (
+                "milestone_03_ready_motion_authority.py",
+                "execute_ready",
+                "ready_arm_only",
+                READY_ARM_TARGETS,
+            ),
             (
                 "milestone_03_observe_left_motion_authority.py",
                 "execute_observe_left",
+                "observe_left_arm_only",
+                OBSERVE_LEFT_ARM_TARGETS,
             ),
             (
                 "milestone_03_observe_center_motion_authority.py",
                 "execute_observe_center",
+                "observe_center_arm_only",
+                OBSERVE_CENTER_ARM_TARGETS,
             ),
             (
                 "milestone_03_observe_right_motion_authority.py",
                 "execute_observe_right",
+                "observe_right_arm_only",
+                OBSERVE_RIGHT_ARM_TARGETS,
             ),
         ]
-        for filename, function_name in cases:
+        for filename, function_name, action, targets in cases:
             with self.subTest(filename=filename):
                 module = self.load_wrapper(filename)
                 module.execute_named_pose = Mock(return_value={"ok": False})
                 getattr(module, function_name)()
-                module.execute_named_pose.assert_called_once()
+                module.execute_named_pose.assert_called_once_with(
+                    action, targets
+                )
 
-        for filename, function_name in (
-            ("milestone_03_scan_left_motion_authority.py", "execute_scan_left"),
+        for filename, function_name, action, endpoint in (
+            (
+                "milestone_03_scan_left_motion_authority.py",
+                "execute_scan_left",
+                "scan_left_arm_only",
+                SCAN_LEFT_BASE_TARGET,
+            ),
             (
                 "milestone_03_scan_right_motion_authority.py",
                 "execute_scan_right",
+                "scan_right_arm_only",
+                SCAN_RIGHT_BASE_TARGET,
             ),
         ):
             with self.subTest(filename=filename):
@@ -288,7 +468,16 @@ class DelegationTests(unittest.TestCase):
                     return_value={"ok": False}
                 )
                 getattr(module, function_name)()
-                module.execute_named_sequence.assert_called_once()
+                module.execute_named_sequence.assert_called_once_with(
+                    action,
+                    (
+                        ("ready_arm_only", READY_ARM_TARGETS),
+                        (
+                            "scan_left" if "left" in action else "scan_right",
+                            endpoint,
+                        ),
+                    ),
+                )
 
     def test_special_compatibility_wrappers_delegate(self):
         motion = self.load_wrapper("milestone_03_motion_authority.py")

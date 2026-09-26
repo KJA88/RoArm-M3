@@ -12,8 +12,8 @@ DEFAULT_LIMITS_PATH = (
     Path(__file__).resolve().parents[1] / "calibration" / "joint_limits.json"
 )
 
-BASE_OPERATIONAL_MIN = -1.57
-BASE_OPERATIONAL_MAX = 1.60
+BASE_OPERATIONAL_MIN = -1.578466231
+BASE_OPERATIONAL_MAX = 1.610679827
 VERIFIED_JOINT_IDS = {"shoulder": "2", "elbow": "3", "wrist": "4"}
 KNOWN_UNVERIFIED_JOINTS = {"roll", "gripper"}
 KNOWN_JOINTS = (

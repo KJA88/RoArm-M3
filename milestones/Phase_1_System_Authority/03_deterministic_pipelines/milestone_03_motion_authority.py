@@ -1,17 +1,12 @@
 """Compatibility wrappers for legacy named motion tools."""
+from runtime.core.safety.existing_motions import CANDLE_ARM_TARGETS
 from runtime.core.safety.production_motion import (
     deny_unsupported,
     execute_named_pose,
 )
 
 
-CANDLE_TARGETS = {
-    "base": 0,
-    "shoulder": 0,
-    "elbow": 0,
-    "wrist": 0,
-    "roll": 0,
-}
+CANDLE_TARGETS = CANDLE_ARM_TARGETS
 
 
 def _local_permit_notice(action):
