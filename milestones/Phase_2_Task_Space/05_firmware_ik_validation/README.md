@@ -244,13 +244,17 @@ Another pre-pose may be used only when the task or test explicitly specifies it.
 The production skill ready_approach_center performs that default sequence for task_probe_center only:
 
 READY
--> 3 second settle, the same dwell used by the demonstrated scan
+-> 3 second dwell, the same dwell used by the demonstrated scan
 -> fresh T105
 -> one named T104
--> 3 second settle
+-> 3 second dwell
 -> delayed T105
 
 It does not accept arbitrary XYZ or an alternate pre-pose.
+
+ready_approach_center is live physically verified. One run started from the previous X300 state, completed READY, then completed the center T104. Roll and gripper were preserved. There were no retries and no uncertain outcomes. Immediate command responses were not used as final position proof.
+
+The 3 second dwell is not guaranteed fully settled time. Z changed by about +0.480 mm between the built-in delayed T105 and another T105 taken about 6 seconds later. No cause is inferred, and no compensation is applied.
 
 milestone_05_task_probe_authority.py remains the independent diagnostic probe path. The operational skill does not replace it.
 
