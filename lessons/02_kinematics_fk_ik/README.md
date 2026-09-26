@@ -19,6 +19,8 @@ All commands run from repo root:
 
 ### 1. Planar Model & Calibration
 
+The historical fitted parameters are L1 238.839 mm, L2 316.731 mm, X0 −0.186 mm, Z0 −0.371 mm, shoulder_offset 0.126072 rad, and elbow_offset −0.085031 rad. They are recorded in `docs/02_NOTES_INTERNAL/roarm_kinematics_control_log.json`. `runtime/core/calibration/planar_calib.json` is a different sketch and is not that fit.
+
 The planar model uses parameters from:
 
 - `planar_calib.json`:

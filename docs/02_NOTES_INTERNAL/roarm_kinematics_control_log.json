@@ -216,6 +216,20 @@
         "Z0": -0.371,
         "shoulder_offset": 0.126072,
         "elbow_offset": -0.085031
+      },
+      "do_not_confuse_with_runtime_sketch": {
+        "runtime_file": "runtime/core/calibration/planar_calib.json",
+        "runtime_values": {
+          "L1": 236.0,
+          "L2": 145.0,
+          "L3": 175.0,
+          "X0": -30.0,
+          "X1": -13.3,
+          "Z0": 0.0,
+          "shoulder_offset": 0.0,
+          "elbow_offset": 0.0
+        },
+        "warning": "The runtime sketch is not latest_known_good_fit. Do not substitute it for the historical fitted calibration."
       }
     }
   },

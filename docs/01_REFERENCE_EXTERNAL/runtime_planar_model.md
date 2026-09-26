@@ -13,7 +13,13 @@
 
 ## Planar Calibration (`planar_calib.json`)
 
-This file holds the calibrated 2-link shoulder–elbow model:
+The historical fitted model and the file now at `runtime/core/calibration/planar_calib.json` are not the same model.
+
+The fit, from the 20-row planar fit recorded in `docs/02_NOTES_INTERNAL/roarm_kinematics_control_log.json`, is L1 238.839 mm, L2 316.731 mm, X0 −0.186 mm, Z0 −0.371 mm, shoulder_offset 0.126072 rad, elbow_offset −0.085031 rad. That file lived at the repository root and was removed from the tree in `f29d3a3`.
+
+`runtime/core/calibration/planar_calib.json` is a later sketch: L1 236, L2 145, L3 175, X0 −30, X1 −13.3, Z0 0, and both offsets 0. Do not treat that sketch as the physically fitted calibration.
+
+The historical fit is the 2-link shoulder–elbow model:
 
 - `L1`, `L2`: effective link lengths (mm)
 - `X0`, `Z0`: small origin offsets (mm)

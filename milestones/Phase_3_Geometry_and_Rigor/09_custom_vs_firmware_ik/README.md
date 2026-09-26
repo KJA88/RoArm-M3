@@ -104,6 +104,45 @@ No enforcement.
 No correction.
 Just comparison.
 
+Upstream Waveshare FK Against Recorded T105
+
+This comparison uses the analytical FK in waveshareteam/roarm_ws commit fc2b0e40, solver.hpp namespace roarm_m3, with the published lengths. No length or offset was fitted. No hardware was moved. IK is not part of this result.
+
+The historical fitted planar model is a different model. Its fit is L1 238.839 mm, L2 316.731 mm, X0 −0.186 mm, Z0 −0.371 mm, shoulder_offset 0.126072 rad, elbow_offset −0.085031 rad. runtime/core/calibration/planar_calib.json is a sketch with L1 236, L2 145, L3 175 and zero offsets. That sketch is not the fit, and this comparison does not use either planar file.
+
+Reported joints in, upstream FK out. Signed error is the upstream prediction minus the T105 firmware-reported Cartesian pose. T105 x, y, z, and tit are that firmware report. They are not an independently measured physical TCP position. The numerical agreement supports that this report is computed from the reported joints by the Waveshare FK or an algebraically equivalent model. It does not prove that the firmware source file is solver.hpp.
+
+| Pose | Reported b, s, e, t | T105-reported x, y, z, tit | FK x, y, z, pitch | dx, dy, dz mm | XYZ mm | Pitch rad |
+| --- | --- | --- | --- | --- | --- | --- |
+| READY | −0.001533981, −0.829883606, 2.405281875, 0.016873789 | 161.3352596, −0.247485383, 163.9417706, 0.021475731 | 161.3353, −0.2475, 163.9418, 0.02148 | 7.3e-8, −3.4e-8, 7.9e-8 | 1.1e-7 | 2.1e-10 |
+| CANDLE | −0.004601942, 0.001533981, 0.006135923, 0.001533981 | 46.7404, −0.2151, 552.7962, −1.56159 | 46.7404, −0.2151, 552.7962, −1.56159 | −1.1e-5, 1.9e-6, −1.9e-5 | 2.1e-5 | −2.4e-6 |
+| CENTER | −0.001533981, −0.391165101, 1.768679848, 0.228563137 | 250.3220502, −0.383989517, 238.3865744, 0.035281558 | 250.3221, −0.3840, 238.3866, 0.03528 | 1.6e-8, −5.3e-8, 2.0e-7 | 2.1e-7 | −7.9e-10 |
+| Z200 | −0.001533981, −0.394233062, 2.089281833, −0.099708751 | 251.3942329, −0.385634226, 194.3709341, 0.024543693 | 251.3942, −0.3856, 194.3709, 0.02454 | 6.5e-8, −5.3e-8, −1.7e-7 | 1.9e-7 | 2.1e-10 |
+| Z300 | −0.001533981, −0.305262177, 1.339165228, 0.573708815 | 252.6484006, −0.387558097, 288.7903948, 0.036815539 | 252.6484, −0.3876, 288.7904, 0.03682 | −3.3e-8, −5.3e-8, −9.2e-8 | 1.1e-7 | 2.1e-10 |
+| X300 | −0.001533981, −0.181009733, 1.61681575, 0.188679637 | 300.7399995, −0.461329743, 234.9144945, 0.053689328 | 300.7400, −0.4613, 234.9145, 0.05369 | −4.2e-8, −6.4e-8, 1.3e-7 | 1.5e-7 | −7.9e-10 |
+
+READY through X300 are the full-precision m05 records. CANDLE was supplied rounded to 0.0001 mm and 1e-5 rad, and its residual sits at that rounding. The residual does not grow from READY to X300.
+
+Explicit convention trials, worst XYZ error across the six poses:
+
+| Trial | Worst XYZ mm |
+| --- | --- |
+| Published joint signs | 2.1e-5 |
+| Flip base | 0.923 |
+| Flip shoulder | 339.432 |
+| Flip elbow | 627.100 |
+| Flip wrist | 186.940 |
+| Add unused solver L1, 126.06 mm, to Z | 126.060 |
+| Add URDF base stack, 123.559 mm, to Z | 123.559 |
+
+Pitch `s + e + t − π/2` matches `tit`. Using `s + e + t` without that subtraction misses by up to 1.571 rad. Negating the upstream pitch misses by up to 3.123 rad. No second frame or tool correction was applied. The published map is the one that lines up.
+
+Every recorded base angle is a few thousandths of a radian, and measured |y| is under 0.5 mm. The published base sign agrees with that small Y. This set does not exercise a large yaw.
+
+Replacing the recorded READY wrist 0.016873789 with 0.0015 moves the FK point by 2.648 mm. The comparison uses the recorded wrist.
+
+The upstream FK reproduces the T105 firmware-reported Cartesian pose of these joint states to numerical precision. That is evidence about the firmware report, not evidence that an external measurement of the physical TCP landed on those coordinates. The historical 5.219 mm figure remains the result of a different test: planar IK of the commanded point (235, 0, 234), executed on the arm, with refine leaving that error unchanged.
+
 Test Case Definition
 
 The test set must include:
