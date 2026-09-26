@@ -8,10 +8,12 @@ from .audit import MotionAuditLog
 from .motion_permit import (
     DEFAULT_LIMITS_PATH,
     MotionPermit,
+    TaskSpacePermit,
     _stamp,
     _timestamp,
     evaluate_gripper_motion_permit,
     evaluate_motion_permit,
+    evaluate_task_space_probe_permit,
 )
 from .gripper_policy import DEFAULT_GRIPPER_MAP_PATH
 
@@ -150,6 +152,44 @@ class LocalMotionAuthority:
         self.audit.record("permit_issued", **permit.public_dict())
         return permit
 
+    def issue_task_space_permit(
+        self,
+        *,
+        current_state,
+        target,
+        guardian_state=None,
+        now=None,
+        max_state_age_s=2.0,
+    ):
+        decision = evaluate_task_space_probe_permit(
+            current_state=current_state,
+            target=target,
+            guardian_state=guardian_state,
+            now=now,
+            max_state_age_s=max_state_age_s,
+        )
+        if not decision["allowed"]:
+            self.audit.record(
+                "permit_rejected",
+                reason=decision["reason"],
+                requested_action="task_probe_center",
+                requested_target=target,
+            )
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+
+        issued_timestamp = _timestamp(time.time() if now is None else now)
+        permit = TaskSpacePermit(
+            permit_id=str(uuid4()),
+            issued_at=_stamp(issued_timestamp),
+            expires_at=_stamp(issued_timestamp + self.permit_ttl_s),
+            allowed_action="task_probe_center",
+            allowed_target=dict(target),
+            consumed=False,
+            _authority_id=self._authority_id,
+        )
+        self.audit.record("permit_issued", **permit.public_dict())
+        return permit
+
     def authorize_once(
         self,
         *,
@@ -232,6 +272,44 @@ class LocalMotionAuthority:
             reason=decision["reason"],
             requested_action=action,
             requested_joint="gripper",
+            requested_target=target,
+        )
+        return decision
+
+    def authorize_task_space_once(
+        self,
+        *,
+        permit,
+        target,
+        current_state,
+        guardian_state=None,
+        now=None,
+        max_state_age_s=2.0,
+    ):
+        action = "task_probe_center"
+        self.audit.record(
+            "move_requested",
+            permit_id=getattr(permit, "permit_id", None),
+            requested_action=action,
+            requested_target=target,
+        )
+        with self._lock:
+            decision = self._validate_task_space_permit(
+                permit=permit,
+                action=action,
+                target=target,
+                current_state=current_state,
+                guardian_state=guardian_state,
+                now=now,
+                max_state_age_s=max_state_age_s,
+            )
+            if decision["allowed"]:
+                permit.consumed = True
+        self.audit.record(
+            "permit_accepted" if decision["allowed"] else "permit_rejected",
+            permit_id=getattr(permit, "permit_id", None),
+            reason=decision["reason"],
+            requested_action=action,
             requested_target=target,
         )
         return decision
@@ -373,6 +451,62 @@ class LocalMotionAuthority:
             now=current_timestamp,
             max_state_age_s=max_state_age_s,
             **options,
+        )
+        checks["motion_safety"] = safety["checks"]
+        if not safety["allowed"]:
+            return done(safety["reason"])
+        return done("PERMIT_OK")
+
+    def _validate_task_space_permit(
+        self,
+        *,
+        permit,
+        action,
+        target,
+        current_state,
+        guardian_state,
+        now,
+        max_state_age_s,
+    ):
+        checks = {
+            "permit_present": isinstance(permit, TaskSpacePermit),
+            "issuer_matches": False,
+            "permit_not_consumed": False,
+            "permit_not_expired": False,
+            "request_matches": False,
+        }
+
+        def done(reason):
+            return _result(reason, checks)
+
+        if not checks["permit_present"]:
+            return done("PERMIT_MISSING")
+        if permit._authority_id != self._authority_id:
+            return done("PERMIT_ISSUER_INVALID")
+        checks["issuer_matches"] = True
+        if permit.consumed:
+            return done("PERMIT_CONSUMED")
+        checks["permit_not_consumed"] = True
+        try:
+            current_timestamp = _timestamp(time.time() if now is None else now)
+            expires_timestamp = _timestamp(permit.expires_at)
+        except (TypeError, ValueError, OverflowError):
+            return done("PERMIT_INVALID")
+        if current_timestamp >= expires_timestamp:
+            return done("PERMIT_EXPIRED")
+        checks["permit_not_expired"] = True
+        checks["request_matches"] = (
+            action == permit.allowed_action
+            and target == permit.allowed_target
+        )
+        if not checks["request_matches"]:
+            return done("PERMIT_MISMATCH")
+        safety = evaluate_task_space_probe_permit(
+            current_state=current_state,
+            target=target,
+            guardian_state=guardian_state,
+            now=current_timestamp,
+            max_state_age_s=max_state_age_s,
         )
         checks["motion_safety"] = safety["checks"]
         if not safety["allowed"]:

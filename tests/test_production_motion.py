@@ -24,8 +24,16 @@ from runtime.core.safety.existing_motions import (
     SCAN_LEFT_BASE_TARGET,
     SCAN_RIGHT_BASE_TARGET,
 )
-from runtime.core.safety.motion_authority import LocalMotionAuthority
+from runtime.core.safety.motion_authority import (
+    LocalMotionAuthority,
+    MotionNotAuthorized,
+)
 from runtime.core.safety.production_motion import ProductionMotionAdapter
+from runtime.core.safety.task_space_policy import (
+    TASK_PROBE_CENTER,
+    is_task_probe_center,
+    validate_task_space_target,
+)
 from runtime.core.transport.roarm_http import (
     RoArmHttpError,
     RoArmProductionHttpTransport,
@@ -52,6 +60,31 @@ def fresh_state(**changes):
             "roll": -0.004601942,
             "gripper": 3.13545673,
         },
+    }
+    value.update(changes)
+    return value
+
+
+def task_fresh_state(**changes):
+    value = fresh_state()
+    value["pose"] = {
+        "x": 240.0,
+        "y": 10.0,
+        "z": 260.0,
+        "tilt": 0.1,
+    }
+    value["raw_feedback"] = {
+        "T": 1051,
+        "x": 240.0,
+        "y": 10.0,
+        "z": 260.0,
+        "tit": 0.1,
+        "b": 0.25,
+        "s": 0.0,
+        "e": 1.0,
+        "t": 0.0,
+        "r": -0.004601942,
+        "g": 3.13545673,
     }
     value.update(changes)
     return value
@@ -118,6 +151,20 @@ class FakeTransport:
         packet = full_t102({"gripper": target})
         self.commands.append(packet)
         return {"T": 102}
+
+    def move_task_probe_center(self, *, roll, gripper):
+        packet = {
+            "T": 104,
+            "x": 250.0,
+            "y": 0.0,
+            "z": 250.0,
+            "t": 0.0,
+            "r": roll,
+            "g": gripper,
+            "spd": 0.5,
+        }
+        self.commands.append(packet)
+        return {"T": 1051}
 
     def move_base_scan(self, target):
         packet = {
@@ -222,6 +269,46 @@ class ExistingMotionInventoryTests(unittest.TestCase):
                 self.assertNotIn("hand", targets)
 
 
+class TaskSpacePolicyTests(unittest.TestCase):
+    def test_contract_bounds_are_inclusive(self):
+        cases = (
+            {"x": 150.0, "y": -400.0, "z": 20.0, "pitch": -1.57},
+            {"x": 480.0, "y": 400.0, "z": 500.0, "pitch": 1.57},
+        )
+        for coordinates in cases:
+            target = {"name": "contract_test", **coordinates}
+            with self.subTest(target=target):
+                self.assertTrue(validate_task_space_target(target))
+
+        for field, value in (
+            ("x", 149.99),
+            ("x", 480.01),
+            ("y", -400.01),
+            ("y", 400.01),
+            ("z", 19.99),
+            ("z", 500.01),
+            ("pitch", -1.58),
+            ("pitch", 1.58),
+        ):
+            target = dict(TASK_PROBE_CENTER)
+            target[field] = value
+            with self.subTest(field=field, value=value):
+                self.assertFalse(validate_task_space_target(target))
+
+    def test_only_exact_named_center_probe_matches_production_policy(self):
+        self.assertTrue(is_task_probe_center(TASK_PROBE_CENTER))
+        for change in (
+            {"name": "other"},
+            {"x": 251.0},
+            {"y": 1.0},
+            {"z": 251.0},
+            {"pitch": 0.1},
+        ):
+            target = {**TASK_PROBE_CENTER, **change}
+            with self.subTest(change=change):
+                self.assertFalse(is_task_probe_center(target))
+
+
 class FakeHttpResponse:
     def __init__(self, packet):
         self.text = json.dumps(packet)
@@ -286,6 +373,10 @@ class HttpTransportTests(unittest.TestCase):
             2.0,
             current_joints=state["joints"],
         )
+        transport.move_task_probe_center(
+            roll=state["joints"]["roll"],
+            gripper=state["joints"]["gripper"],
+        )
         transport.move_base_scan(1.610679827)
         transport.close()
 
@@ -328,6 +419,16 @@ class HttpTransportTests(unittest.TestCase):
                     "acc": 0,
                 },
                 {
+                    "T": 104,
+                    "x": 250.0,
+                    "y": 0.0,
+                    "z": 250.0,
+                    "t": 0.0,
+                    "r": -0.004601942,
+                    "g": 3.13545673,
+                    "spd": 0.5,
+                },
+                {
                     "T": 101,
                     "joint": 1,
                     "rad": 1.610679827,
@@ -342,7 +443,7 @@ class HttpTransportTests(unittest.TestCase):
         )
         self.assertEqual(
             [request[2] for request in http.requests],
-            [5.0, 5.0, 5.0, 5.0, 5.0],
+            [5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
         )
         self.assertEqual(state["joints"]["base"], 0.25)
         self.assertEqual(state["transport"], "http")
@@ -375,6 +476,7 @@ class HttpTransportTests(unittest.TestCase):
                 "move_base_scan",
                 "move_gripper_preset",
                 "move_joint",
+                "move_task_probe_center",
                 "read_state",
             },
         )
@@ -754,6 +856,139 @@ class ProductionAdapterTests(unittest.TestCase):
         self.assertEqual(second["reason"], "PERMIT_CONSUMED")
         self.assertTrue(permit.consumed)
 
+    def test_task_probe_center_sends_one_exact_preserving_t104(self):
+        transport = FakeTransport()
+        state = task_fresh_state()
+        state["raw_feedback"]["r"] = -0.0123
+        state["raw_feedback"]["g"] = 2.4
+        result = self.adapter(
+            state, lambda: transport
+        ).execute_task_probe_center()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["target"], TASK_PROBE_CENTER)
+        self.assertTrue(result["permit_consumed"])
+        self.assertEqual(result["hardware_action"], "T104_RESPONSE_RECEIVED")
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(
+            transport.commands,
+            [
+                {
+                    "T": 104,
+                    "x": 250.0,
+                    "y": 0.0,
+                    "z": 250.0,
+                    "t": 0.0,
+                    "r": state["raw_feedback"]["r"],
+                    "g": state["raw_feedback"]["g"],
+                    "spd": 0.5,
+                }
+            ],
+        )
+
+    def test_task_probe_rejects_arbitrary_xyz_without_generic_authority(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        authority = LocalMotionAuthority(
+            audit_path=Path(self.temp.name) / "audit.jsonl"
+        )
+        for change in ({"x": 251.0}, {"y": 1.0}, {"z": 249.0}):
+            target = {**TASK_PROBE_CENTER, **change}
+            with self.subTest(change=change):
+                with self.assertRaises(MotionNotAuthorized) as denied:
+                    authority.issue_task_space_permit(
+                        current_state=task_fresh_state(),
+                        target=target,
+                    )
+                self.assertEqual(
+                    denied.exception.reason,
+                    "TASK_PROBE_NOT_AUTHORIZED",
+                )
+        self.assertFalse(
+            hasattr(ProductionMotionAdapter, "execute_task_space_target")
+        )
+
+    def test_task_probe_requires_fresh_complete_finite_t105(self):
+        malformed_cases = [
+            (task_fresh_state(fresh=False), "STATE_NOT_FRESH"),
+            (
+                task_fresh_state(timestamp_unix=time.time() - 10),
+                "STATE_STALE",
+            ),
+        ]
+        for field in ("x", "y", "z", "tit", "b", "s", "e", "t", "r", "g"):
+            missing = task_fresh_state()
+            missing["raw_feedback"] = dict(missing["raw_feedback"])
+            missing["raw_feedback"].pop(field)
+            malformed_cases.append((missing, "TASK_STATE_INVALID"))
+
+            nonfinite = task_fresh_state()
+            nonfinite["raw_feedback"] = dict(nonfinite["raw_feedback"])
+            nonfinite["raw_feedback"][field] = math.nan
+            malformed_cases.append((nonfinite, "TASK_STATE_INVALID"))
+
+        for state, reason in malformed_cases:
+            with self.subTest(reason=reason, state=state):
+                factory = Mock(
+                    side_effect=AssertionError("transport must stay closed")
+                )
+                result = self.adapter(
+                    state, factory
+                ).execute_task_probe_center()
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["reason"], reason)
+                self.assertEqual(result["hardware_action"], "NONE")
+                factory.assert_not_called()
+
+    def test_task_probe_permit_is_one_shot(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        authority = LocalMotionAuthority(
+            audit_path=Path(self.temp.name) / "audit.jsonl"
+        )
+        state = task_fresh_state()
+        permit = authority.issue_task_space_permit(
+            current_state=state,
+            target=TASK_PROBE_CENTER,
+        )
+        first = authority.authorize_task_space_once(
+            permit=permit,
+            target=TASK_PROBE_CENTER,
+            current_state=state,
+        )
+        second = authority.authorize_task_space_once(
+            permit=permit,
+            target=TASK_PROBE_CENTER,
+            current_state=state,
+        )
+
+        self.assertTrue(first["allowed"])
+        self.assertEqual(second["reason"], "PERMIT_CONSUMED")
+        self.assertTrue(permit.consumed)
+
+    def test_task_probe_timeout_after_consumption_is_uncertain_without_retry(self):
+        transport = Mock()
+        transport.move_task_probe_center.side_effect = requests.Timeout(
+            "simulated T104 timeout"
+        )
+        state = task_fresh_state()
+        result = self.adapter(
+            state, lambda: transport
+        ).execute_task_probe_center()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["authorized"])
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertEqual(result["hardware_action"], "T104_OUTCOME_UNCERTAIN")
+        self.assertTrue(result["permit_consumed"])
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(result["error"], "simulated T104 timeout")
+        transport.move_task_probe_center.assert_called_once_with(
+            roll=state["raw_feedback"]["r"],
+            gripper=state["raw_feedback"]["g"],
+        )
+        transport.close.assert_called_once_with()
+
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
         adapter = self.adapter(fresh_state(), lambda: transport)
@@ -1020,6 +1255,18 @@ class DelegationTests(unittest.TestCase):
         gripper._execute = Mock(return_value={"ok": False})
         gripper.execute_gripper_position("open")
         gripper._execute.assert_called_once_with("open")
+
+        task_probe = load_file(
+            "test_milestone_05_task_probe_authority",
+            ROOT
+            / (
+                "milestones/Phase_2_Task_Space/05_firmware_ik_validation/"
+                "milestone_05_task_probe_authority.py"
+            ),
+        )
+        task_probe._execute = Mock(return_value={"ok": False})
+        task_probe.execute_task_probe_center()
+        task_probe._execute.assert_called_once_with()
 
     def test_daily_cli_delegates(self):
         module = load_file(

@@ -10,6 +10,7 @@ from .existing_motions import (
     SCAN_RIGHT_BASE_TARGET,
 )
 from .gripper_policy import resolve_gripper_preset
+from .task_space_policy import TASK_PROBE_CENTER
 from .motion_authority import LocalMotionAuthority, MotionNotAuthorized
 from .motion_permit import evaluate_motion_permit
 from runtime.core.supervisor.mechanical_supervisor import MechanicalSupervisor
@@ -359,6 +360,67 @@ class ProductionMotionAdapter:
             if transport is not None:
                 transport.close()
 
+    def execute_task_probe_center(self):
+        action = "task_probe_center"
+        target = dict(TASK_PROBE_CENTER)
+        current_state, denied = self._state(action)
+        if denied:
+            return denied
+        try:
+            permit = self.authority.issue_task_space_permit(
+                current_state=current_state,
+                target=target,
+            )
+        except MotionNotAuthorized as exc:
+            return _denied(action, exc.reason, target=target, checks=exc.checks)
+
+        transport = None
+        try:
+            transport = self.transport_factory()
+            supervisor = MechanicalSupervisor(
+                transport=transport,
+                authority=self.authority,
+            )
+            response = supervisor.move_task_probe_center(
+                target,
+                permit=permit,
+                current_state=current_state,
+            )
+            return {
+                "ok": True,
+                "authorized": True,
+                "action": action,
+                "target": target,
+                "permit_id": permit.permit_id,
+                "permit_consumed": permit.consumed,
+                "response": response,
+                "hardware_action": "T104_RESPONSE_RECEIVED",
+                "position_verified": False,
+            }
+        except Exception as exc:
+            if permit.consumed:
+                return _uncertain(
+                    action,
+                    hardware_action="T104_OUTCOME_UNCERTAIN",
+                    target=target,
+                    permit_id=permit.permit_id,
+                    permit_consumed=True,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            return _denied(
+                action,
+                "EXECUTION_FAILED",
+                target=target,
+                permit_id=permit.permit_id,
+                permit_consumed=False,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+        finally:
+            if transport is not None:
+                transport.close()
+
     def execute_scan(self, name, ready_targets, endpoint):
         expected_endpoint = SCAN_ENDPOINTS.get(name)
         if (
@@ -612,6 +674,10 @@ def execute_gripper_position(preset):
     return _DEFAULT_ADAPTER.execute_gripper_preset(preset)
 
 
+def execute_task_probe_center():
+    return _DEFAULT_ADAPTER.execute_task_probe_center()
+
+
 def deny_unsupported(action, **details):
     return _DEFAULT_ADAPTER.unsupported(action, **details)
 
@@ -628,5 +694,6 @@ __all__ = [
     "execute_named_pose",
     "execute_named_sequence",
     "execute_scan",
+    "execute_task_probe_center",
     "inspect_gripper",
 ]

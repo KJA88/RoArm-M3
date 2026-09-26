@@ -240,6 +240,62 @@ class MechanicalSupervisor:
         self.authority.record_move_result(permit, succeeded=True)
         return response
 
+    def move_task_probe_center(
+        self,
+        target,
+        *,
+        permit,
+        current_state,
+        guardian_state=None,
+        now=None,
+    ):
+        """Execute the fixed center T:104 probe after one-shot authorization."""
+        raw = (
+            current_state.get("raw_feedback")
+            if isinstance(current_state, dict)
+            else None
+        )
+        preserved = {
+            "roll": raw.get("r") if isinstance(raw, dict) else None,
+            "gripper": raw.get("g") if isinstance(raw, dict) else None,
+        }
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            for value in preserved.values()
+        ):
+            raise MotionNotAuthorized("TASK_STATE_INVALID")
+        decision = self.authority.authorize_task_space_once(
+            permit=permit,
+            target=target,
+            current_state=current_state,
+            guardian_state=guardian_state,
+            now=now,
+        )
+        if not decision["allowed"]:
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+        if self._transport is None:
+            error = RuntimeError("No local motion transport is configured")
+            self.authority.record_move_result(
+                permit, succeeded=False, error=error
+            )
+            raise error
+
+        self.authority.record_move_start(permit)
+        try:
+            response = self._transport.move_task_probe_center(
+                roll=preserved["roll"],
+                gripper=preserved["gripper"],
+            )
+        except Exception as exc:
+            self.authority.record_move_result(
+                permit, succeeded=False, error=exc
+            )
+            raise
+        self.authority.record_move_result(permit, succeeded=True)
+        return response
+
     def move_to_pose(
         self,
         x,

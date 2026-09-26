@@ -157,6 +157,27 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             }
         )
 
+    def move_task_probe_center(self, *, roll, gripper):
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            for value in (roll, gripper)
+        ):
+            raise RoArmHttpError("TASK_PRESERVATION_STATE_INVALID")
+        return self._get(
+            {
+                "T": 104,
+                "x": 250.0,
+                "y": 0.0,
+                "z": 250.0,
+                "t": 0.0,
+                "r": float(roll),
+                "g": float(gripper),
+                "spd": 0.5,
+            }
+        )
+
     def move_base_scan(self, target):
         if (
             not isinstance(target, (int, float))

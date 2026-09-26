@@ -11,6 +11,7 @@ from .gripper_policy import (
     DEFAULT_GRIPPER_MAP_PATH,
     load_verified_gripper_presets,
 )
+from .task_space_policy import is_task_probe_center
 
 
 DEFAULT_LIMITS_PATH = (
@@ -37,6 +38,24 @@ class MotionPermit:
     allowed_joint: str
     allowed_target: float
     max_delta: Optional[float]
+    consumed: bool = False
+    _authority_id: str = field(default="", repr=False, compare=False)
+
+    def public_dict(self):
+        result = asdict(self)
+        result.pop("_authority_id", None)
+        return result
+
+
+@dataclass
+class TaskSpacePermit:
+    """One-shot authority for one exact named firmware-IK probe."""
+
+    permit_id: str
+    issued_at: str
+    expires_at: str
+    allowed_action: str
+    allowed_target: dict
     consumed: bool = False
     _authority_id: str = field(default="", repr=False, compare=False)
 
@@ -273,13 +292,76 @@ def evaluate_gripper_motion_permit(
     return _result("PERMIT_OK", checks)
 
 
+def evaluate_task_space_probe_permit(
+    *,
+    current_state,
+    target,
+    guardian_state=None,
+    now=None,
+    max_state_age_s=2.0,
+):
+    """Authorize only the named center probe with complete fresh T:105 evidence."""
+    checks = {"guardian_required": False}
+
+    def deny(reason):
+        return _result(reason, checks)
+
+    if not isinstance(current_state, dict):
+        return deny("STATE_MISSING")
+    checks["state_present"] = True
+    if current_state.get("connected") is not True:
+        return deny("STATE_DISCONNECTED")
+    checks["connected"] = True
+    if current_state.get("fresh") is not True:
+        return deny("STATE_NOT_FRESH")
+    checks["fresh"] = True
+
+    state_time = current_state.get("timestamp_unix")
+    if state_time is None:
+        state_time = current_state.get("observed_at")
+    try:
+        state_timestamp = _timestamp(state_time)
+        current_timestamp = _timestamp(time.time() if now is None else now)
+    except (TypeError, ValueError, OverflowError):
+        return deny("STATE_TIMESTAMP_INVALID")
+    if state_timestamp > current_timestamp:
+        return deny("STATE_TIMESTAMP_INVALID")
+    checks["timestamp_valid"] = True
+    if not _is_finite_number(max_state_age_s) or max_state_age_s < 0:
+        return deny("TARGET_INVALID")
+    checks["state_age_s"] = current_timestamp - state_timestamp
+    if checks["state_age_s"] > float(max_state_age_s):
+        return deny("STATE_STALE")
+    checks["state_age_valid"] = True
+
+    raw = current_state.get("raw_feedback")
+    required = {"x", "y", "z", "tit", "b", "s", "e", "t", "r", "g"}
+    if (
+        not isinstance(raw, dict)
+        or raw.get("T") != 1051
+        or any(not _is_finite_number(raw.get(field)) for field in required)
+    ):
+        return deny("TASK_STATE_INVALID")
+    checks["full_t105_state_valid"] = True
+
+    if not is_task_probe_center(target):
+        return deny("TASK_PROBE_NOT_AUTHORIZED")
+    checks["target_contract_valid"] = True
+    checks["target_named_exact"] = True
+    if guardian_state is not None:
+        checks["guardian_ignored"] = True
+    return _result("PERMIT_OK", checks)
+
+
 __all__ = [
     "BASE_OPERATIONAL_MAX",
     "BASE_OPERATIONAL_MIN",
     "DEFAULT_LIMITS_PATH",
     "MotionPermit",
+    "TaskSpacePermit",
     "evaluate_gripper_motion_permit",
     "evaluate_motion_permit",
+    "evaluate_task_space_probe_permit",
     "_stamp",
     "_timestamp",
 ]
