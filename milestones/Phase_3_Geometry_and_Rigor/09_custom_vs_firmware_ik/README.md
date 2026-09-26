@@ -143,6 +143,29 @@ Replacing the recorded READY wrist 0.016873789 with 0.0015 moves the FK point by
 
 The upstream FK reproduces the T105 firmware-reported Cartesian pose of these joint states to numerical precision. That is evidence about the firmware report, not evidence that an external measurement of the physical TCP landed on those coordinates. The historical 5.219 mm figure remains the result of a different test: planar IK of the commanded point (235, 0, 234), executed on the arm, with refine leaving that error unchanged.
 
+Upstream Waveshare IK Against Commanded T104 Targets
+
+The IK is `computeJointRadbyPos` in the same header at fc2b0e40. Lengths are unchanged. The function returns one solution, the positive-acos branch. It does not take a current pose. A reflected-acos triangle reaches the same Cartesian point and is computed only to identify that other configuration. The header does not return it.
+
+FK of the returned joints meets the requested target within 0.0013 mm. That remainder is the header literal 3.1416 in the tool shift, rather than π. It is not a centimeter-scale solver miss.
+
+Joint residual is returned solution minus the settled T105 joint readback. Cartesian gap is FK of the returned joints minus FK of the settled joints. Because settled-joint FK matches the T105 report, that gap is the command-to-report gap inside this model.
+
+| Target | Returned b, s, e, t | db, ds, de, dt rad | FK to target mm | FK(IK) − FK(settled) mm |
+| --- | --- | --- | --- | --- |
+| CENTER 250, 0, 250, 0 | 0, −0.389977, 1.728610, 0.232163 | +0.001534, +0.001188, −0.040070, +0.003600 | 0.0013 | −0.322, +0.384, +11.612; norm 11.623 |
+| Z200 250, 0, 200, 0 | 0, −0.403002, 2.084235, −0.110436 | +0.001534, −0.008769, −0.005047, −0.010728 | 0.0013 | −1.394, +0.386, +5.628; norm 5.811 |
+| Z300 250, 0, 300, 0 | 0, −0.306096, 1.299764, 0.577129 | +0.001534, −0.000834, −0.039402, +0.003420 | 0.0013 | −2.649, +0.388, +11.208; norm 11.524 |
+| X300 300, 0, 250, 0 | 0, −0.184325, 1.578539, 0.176582 | +0.001534, −0.003315, −0.038276, −0.012098 | 0.0013 | −0.740, +0.461, +15.084; norm 15.109 |
+
+CENTER uses the controlled-center readback, elbow 1.768679848. An earlier readback of the same command has elbow 1.767145868. Its elbow residual against this IK is −0.038536 rad, the same branch.
+
+The reflected branch is 2 to 4 rad away in elbow and wrist on every target. Joint-space distance from READY, from the recorded Z200 pre-pose of the controlled center, and from the recorded center pre-pose of X300, is several radians smaller for the returned branch than for the reflection. Z200 and Z300 do not store a pre-pose. The header still does not consult READY. For these four targets, the branch it returns is the one that continues from READY.
+
+The returned solution is the configuration the arm settled in. It is not a second pose that happens to share the Cartesian target. Shoulder residuals stay under 0.01 rad. Elbow is the large term: about −0.040 rad on CENTER, Z300, and X300, and −0.005 rad on Z200. Passed through the validated FK, that joint gap is the 5.8 to 15.1 mm Cartesian gap above.
+
+T104 does not report the joints it solved before motion. The settled readback cannot separate an arm that stopped 0.04 rad short of this solution from firmware IK that chose joints already 0.04 rad away inside the same branch. The readback does rule out the reflected configuration.
+
 Test Case Definition
 
 The test set must include:
