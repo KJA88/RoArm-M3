@@ -42,7 +42,8 @@ from milestone_03_motion_validator import validate_joint_proposal
 from milestone_03_state_aware_validator import (
     validate_state_aware_joint_proposal,
 )
-from milestone_03_motion_authority import execute_lissajous, execute_candle
+from milestone_03_motion_authority import execute_lissajous
+from milestone_03_candle_motion_authority import execute_candle
 from milestone_03_joint_motion_authority import execute_constrained_joint_move
 from milestone_03_gripper_motion_authority import execute_gripper_position
 from milestone_03_home_motion_authority import execute_home

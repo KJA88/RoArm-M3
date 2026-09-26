@@ -15,7 +15,6 @@ CANDLE_ARM_TARGETS = {
     "shoulder": 0.0,
     "elbow": 0.0,
     "wrist": 0.0,
-    "roll": 0.0,
 }
 CANDLE_GRIPPER_EVIDENCE = (1.49, 1.0)
 

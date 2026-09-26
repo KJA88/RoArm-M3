@@ -167,6 +167,16 @@ class ExistingMotionInventoryTests(unittest.TestCase):
     def test_candle_conflict_remains_unresolved_and_arm_only(self):
         self.assertEqual(CANDLE_GRIPPER_EVIDENCE, (1.49, 1.0))
         self.assertNotIn("hand", CANDLE_ARM_TARGETS)
+        self.assertNotIn("roll", CANDLE_ARM_TARGETS)
+        self.assertEqual(
+            CANDLE_ARM_TARGETS,
+            {
+                "base": 0.0,
+                "shoulder": 0.0,
+                "elbow": 0.0,
+                "wrist": 0.0,
+            },
+        )
         candle = EXISTING_MOTION_INVENTORY["candle"]
         self.assertEqual(candle["gripper_resolution"], "UNRESOLVED")
         self.assertEqual(candle["production_status"], "ARM_TARGETS_ONLY")
@@ -481,16 +491,11 @@ class ProductionAdapterTests(unittest.TestCase):
         transport.move_arm_pose.side_effect = requests.Timeout(
             "simulated pose timeout"
         )
-        targets = {
-            "base": 0.0,
-            "shoulder": 0.0,
-            "elbow": 1.0,
-            "wrist": 0.0,
-        }
+        targets = CANDLE_ARM_TARGETS
 
         result = self.adapter(
             fresh_state(), lambda: transport
-        ).execute_named_pose("test_arm_only", targets)
+        ).execute_named_pose("candle_arm_only", targets)
 
         self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
         self.assertTrue(result["authorized"])
@@ -565,6 +570,35 @@ class ProductionAdapterTests(unittest.TestCase):
                 )
                 factory.assert_not_called()
 
+    def test_candle_malformed_or_stale_state_fails_closed(self):
+        malformed_joints = dict(fresh_state()["joints"])
+        malformed_joints.pop("gripper")
+        cases = (
+            (
+                fresh_state(timestamp_unix=time.time() - 10),
+                "STATE_STALE",
+            ),
+            (
+                fresh_state(joints=malformed_joints),
+                "PRESERVATION_STATE_INVALID",
+            ),
+        )
+        for state, reason in cases:
+            with self.subTest(reason=reason):
+                factory = Mock(
+                    side_effect=AssertionError("transport must stay closed")
+                )
+                result = self.adapter(
+                    state, factory
+                ).execute_named_pose(
+                    "candle_arm_only",
+                    CANDLE_ARM_TARGETS,
+                )
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["reason"], reason)
+                self.assertEqual(result["hardware_action"], "NONE")
+                factory.assert_not_called()
+
     def test_operational_base_and_verified_joint_are_authorized(self):
         transport = FakeTransport()
         adapter = self.adapter(fresh_state(), lambda: transport)
@@ -603,8 +637,9 @@ class ProductionAdapterTests(unittest.TestCase):
             [full_t102(targets)],
         )
 
-    def test_ready_and_observe_arm_only_poses_are_authorized(self):
+    def test_candle_ready_and_observe_arm_only_poses_are_authorized(self):
         cases = (
+            ("candle_arm_only", CANDLE_ARM_TARGETS),
             ("ready_arm_only", READY_ARM_TARGETS),
             ("observe_left_arm_only", OBSERVE_LEFT_ARM_TARGETS),
             ("observe_center_arm_only", OBSERVE_CENTER_ARM_TARGETS),
@@ -746,6 +781,12 @@ class DelegationTests(unittest.TestCase):
 
     def test_named_compatibility_wrappers_delegate(self):
         cases = [
+            (
+                "milestone_03_candle_motion_authority.py",
+                "execute_candle",
+                "candle_arm_only",
+                CANDLE_ARM_TARGETS,
+            ),
             (
                 "milestone_03_ready_motion_authority.py",
                 "execute_ready",
