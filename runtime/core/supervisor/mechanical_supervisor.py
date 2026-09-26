@@ -156,6 +156,49 @@ class MechanicalSupervisor:
             self.authority.record_move_result(permit, succeeded=True)
         return response
 
+    def move_base_scan(
+        self,
+        target,
+        *,
+        permit,
+        current_state,
+        guardian_state=None,
+        now=None,
+    ):
+        """Execute one fixed-purpose demonstrated base scan endpoint."""
+        decision = self.authority.authorize_once(
+            permit=permit,
+            action="move_joint",
+            joint="base",
+            target=target,
+            current_state=current_state,
+            guardian_state=guardian_state,
+            now=now,
+        )
+        if not decision["allowed"]:
+            raise MotionNotAuthorized(decision["reason"], decision["checks"])
+        if self._transport is None:
+            error = RuntimeError("No local motion transport is configured")
+            self.authority.record_move_result(
+                permit,
+                succeeded=False,
+                error=error,
+            )
+            raise error
+
+        self.authority.record_move_start(permit)
+        try:
+            response = self._transport.move_base_scan(float(target))
+        except Exception as exc:
+            self.authority.record_move_result(
+                permit,
+                succeeded=False,
+                error=exc,
+            )
+            raise
+        self.authority.record_move_result(permit, succeeded=True)
+        return response
+
     def move_to_pose(
         self,
         x,

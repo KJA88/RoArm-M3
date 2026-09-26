@@ -3,7 +3,12 @@ import json
 import math
 import os
 from pathlib import Path
+import time
 
+from .existing_motions import (
+    SCAN_LEFT_BASE_TARGET,
+    SCAN_RIGHT_BASE_TARGET,
+)
 from .motion_authority import LocalMotionAuthority, MotionNotAuthorized
 from .motion_permit import evaluate_motion_permit
 from runtime.core.supervisor.mechanical_supervisor import MechanicalSupervisor
@@ -19,6 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 GRIPPER_MAP = REPO_ROOT / "runtime/core/calibration/gripper_map.json"
 ARM_ONLY_JOINTS = {"base", "shoulder", "elbow", "wrist"}
 ALL_STATE_JOINTS = ARM_ONLY_JOINTS | {"roll", "gripper"}
+SCAN_ENDPOINTS = {
+    "scan_left_arm_only": SCAN_LEFT_BASE_TARGET["base"],
+    "scan_right_arm_only": SCAN_RIGHT_BASE_TARGET["base"],
+}
 
 
 def _denied(action, reason, **details):
@@ -32,13 +41,18 @@ def _denied(action, reason, **details):
     }
 
 
-def _uncertain(action, **details):
+def _uncertain(
+    action,
+    *,
+    hardware_action="T102_OUTCOME_UNCERTAIN",
+    **details,
+):
     return {
         "ok": False,
         "authorized": True,
         "action": action,
         "reason": "EXECUTION_OUTCOME_UNCERTAIN",
-        "hardware_action": "T102_OUTCOME_UNCERTAIN",
+        "hardware_action": hardware_action,
         "position_verified": False,
         **details,
     }
@@ -81,10 +95,12 @@ class ProductionMotionAdapter:
         state_reader=None,
         transport_factory=None,
         authority=None,
+        sleep_fn=time.sleep,
     ):
         self.state_reader = state_reader or _read_state
         self.transport_factory = transport_factory or _open_transport
         self.authority = authority or LocalMotionAuthority()
+        self.sleep_fn = sleep_fn
 
     def _state(self, action):
         try:
@@ -259,6 +275,141 @@ class ProductionMotionAdapter:
     def execute_named_pose(self, name, targets):
         return self.execute_arm_pose(name, targets)
 
+    def execute_scan(self, name, ready_targets, endpoint):
+        expected_endpoint = SCAN_ENDPOINTS.get(name)
+        if (
+            expected_endpoint is None
+            or not isinstance(endpoint, (int, float))
+            or isinstance(endpoint, bool)
+            or float(endpoint) != expected_endpoint
+        ):
+            return _denied(name, "SCAN_ENDPOINT_NOT_AUTHORIZED")
+
+        ready = self.execute_arm_pose("ready_arm_only", ready_targets)
+        ready["stage"] = "ready_arm_only"
+        if not ready["ok"]:
+            if ready.get("reason") == "EXECUTION_OUTCOME_UNCERTAIN":
+                return _uncertain(
+                    name,
+                    results=[ready],
+                    uncertain_stage="ready_arm_only",
+                    error=ready.get("error"),
+                    error_type=ready.get("error_type"),
+                )
+            return _denied(name, "READY_STAGE_FAILED", results=[ready])
+
+        try:
+            self.sleep_fn(3.0)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "authorized": True,
+                "action": name,
+                "reason": "SCAN_DWELL_FAILED",
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "results": [ready],
+            }
+
+        current_state, denied = self._state(name)
+        if denied:
+            return {
+                "ok": False,
+                "authorized": True,
+                "action": name,
+                "reason": "SCAN_STATE_UNAVAILABLE",
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
+                "state_error": denied,
+                "results": [ready],
+            }
+        try:
+            permit = self.authority.issue_permit(
+                current_state=current_state,
+                joint="base",
+                target=endpoint,
+            )
+        except MotionNotAuthorized as exc:
+            return {
+                "ok": False,
+                "authorized": True,
+                "action": name,
+                "reason": exc.reason,
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
+                "checks": exc.checks,
+                "results": [ready],
+            }
+
+        transport = None
+        try:
+            transport = self.transport_factory()
+            supervisor = MechanicalSupervisor(
+                transport=transport,
+                authority=self.authority,
+            )
+            response = supervisor.move_base_scan(
+                endpoint,
+                permit=permit,
+                current_state=current_state,
+            )
+            scan = {
+                "ok": True,
+                "authorized": True,
+                "action": "base_scan",
+                "stage": "base_scan",
+                "target": float(endpoint),
+                "permit_id": permit.permit_id,
+                "permit_consumed": permit.consumed,
+                "response": response,
+                "hardware_action": "T101_RESPONSE_RECEIVED",
+                "position_verified": False,
+            }
+            return {
+                "ok": True,
+                "authorized": True,
+                "action": name,
+                "results": [ready, scan],
+                "hardware_action": "SCAN_COMMAND_RESPONSES_RECEIVED",
+                "position_verified": False,
+            }
+        except Exception as exc:
+            if permit.consumed:
+                scan = _uncertain(
+                    "base_scan",
+                    hardware_action="T101_OUTCOME_UNCERTAIN",
+                    target=float(endpoint),
+                    permit_id=permit.permit_id,
+                    permit_consumed=True,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                scan["stage"] = "base_scan"
+                return _uncertain(
+                    name,
+                    hardware_action="T101_OUTCOME_UNCERTAIN",
+                    uncertain_stage="base_scan",
+                    results=[ready, scan],
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            return {
+                "ok": False,
+                "authorized": True,
+                "action": name,
+                "reason": "SCAN_EXECUTION_NOT_STARTED",
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "results": [ready],
+            }
+        finally:
+            if transport is not None:
+                transport.close()
+
     def execute_named_sequence(self, name, stages):
         """Preflight every target in every stage before allowing movement."""
         current_state, denied = self._state(name)
@@ -369,6 +520,10 @@ def execute_named_sequence(name, stages):
     return _DEFAULT_ADAPTER.execute_named_sequence(name, stages)
 
 
+def execute_scan(name, ready_targets, endpoint):
+    return _DEFAULT_ADAPTER.execute_scan(name, ready_targets, endpoint)
+
+
 def deny_unsupported(action, **details):
     return _DEFAULT_ADAPTER.unsupported(action, **details)
 
@@ -383,5 +538,6 @@ __all__ = [
     "execute_joint",
     "execute_named_pose",
     "execute_named_sequence",
+    "execute_scan",
     "inspect_gripper",
 ]

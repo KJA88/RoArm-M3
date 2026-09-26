@@ -4,7 +4,7 @@ from runtime.core.safety.existing_motions import (
     READY_TARGETS,
     SCAN_LEFT_BASE_TARGET,
 )
-from runtime.core.safety.production_motion import execute_named_sequence
+from runtime.core.safety.production_motion import execute_scan
 
 
 LEFT_BASE_TARGET = SCAN_LEFT_BASE_TARGET
@@ -15,10 +15,8 @@ def arm_scan_left():
 
 
 def execute_scan_left():
-    return execute_named_sequence(
+    return execute_scan(
         "scan_left_arm_only",
-        (
-            ("ready_arm_only", READY_ARM_TARGETS),
-            ("scan_left", LEFT_BASE_TARGET),
-        ),
+        READY_ARM_TARGETS,
+        LEFT_BASE_TARGET["base"],
     )

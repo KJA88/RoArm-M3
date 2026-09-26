@@ -114,6 +114,17 @@ class FakeTransport:
         self.commands.append(packet)
         return {"T": 102}
 
+    def move_base_scan(self, target):
+        packet = {
+            "T": 101,
+            "joint": 1,
+            "rad": target,
+            "spd": 200,
+            "acc": 10,
+        }
+        self.commands.append(packet)
+        return {"T": 101}
+
     def close(self):
         self.closed = True
 
@@ -256,6 +267,7 @@ class HttpTransportTests(unittest.TestCase):
             roll=state["joints"]["roll"],
             hand=state["joints"]["gripper"],
         )
+        transport.move_base_scan(1.610679827)
         transport.close()
 
         self.assertFalse(http.trust_env)
@@ -285,6 +297,13 @@ class HttpTransportTests(unittest.TestCase):
                     "spd": 0,
                     "acc": 0,
                 },
+                {
+                    "T": 101,
+                    "joint": 1,
+                    "rad": 1.610679827,
+                    "spd": 200,
+                    "acc": 10,
+                },
             ],
         )
         self.assertTrue(
@@ -293,7 +312,7 @@ class HttpTransportTests(unittest.TestCase):
         )
         self.assertEqual(
             [request[2] for request in http.requests],
-            [5.0, 5.0, 5.0],
+            [5.0, 5.0, 5.0, 5.0],
         )
         self.assertEqual(state["joints"]["base"], 0.25)
         self.assertEqual(state["transport"], "http")
@@ -320,7 +339,13 @@ class HttpTransportTests(unittest.TestCase):
         }
         self.assertEqual(
             public,
-            {"close", "move_arm_pose", "move_joint", "read_state"},
+            {
+                "close",
+                "move_arm_pose",
+                "move_base_scan",
+                "move_joint",
+                "read_state",
+            },
         )
 
     def test_arm_pose_transport_rejects_non_arm_and_nonfinite_targets(self):
@@ -347,18 +372,48 @@ class HttpTransportTests(unittest.TestCase):
                     )
         self.assertEqual(transport._session.requests, [])
 
+    def test_scan_transport_allows_only_demonstrated_endpoints(self):
+        http = FakeHttpSession()
+        transport = RoArmProductionHttpTransport(session=http)
+        transport.move_base_scan(1.610679827)
+        transport.move_base_scan(-1.578466231)
+        for target in (0.0, 1.6, -1.57, math.nan, math.inf):
+            with self.subTest(target=target):
+                with self.assertRaises(RoArmHttpError):
+                    transport.move_base_scan(target)
+        self.assertEqual(
+            [request[1] for request in http.requests],
+            [
+                {
+                    "T": 101,
+                    "joint": 1,
+                    "rad": 1.610679827,
+                    "spd": 200,
+                    "acc": 10,
+                },
+                {
+                    "T": 101,
+                    "joint": 1,
+                    "rad": -1.578466231,
+                    "spd": 200,
+                    "acc": 10,
+                },
+            ],
+        )
+
 
 class ProductionAdapterTests(unittest.TestCase):
-    def adapter(self, state, transport_factory):
+    def adapter(self, state, transport_factory, sleep_fn=lambda _: None):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         authority = LocalMotionAuthority(
             audit_path=Path(self.temp.name) / "audit.jsonl"
         )
         return ProductionMotionAdapter(
-            state_reader=lambda: state,
+            state_reader=state if callable(state) else lambda: state,
             transport_factory=transport_factory,
             authority=authority,
+            sleep_fn=sleep_fn,
         )
 
     def test_authorized_joint_uses_supervisor_and_consumes_permit(self):
@@ -587,6 +642,10 @@ class ProductionAdapterTests(unittest.TestCase):
         ):
             with self.subTest(action=action):
                 transports = []
+                sleeps = []
+                state_reader = Mock(
+                    side_effect=[fresh_state(), fresh_state()]
+                )
 
                 def factory():
                     transport = FakeTransport()
@@ -594,20 +653,22 @@ class ProductionAdapterTests(unittest.TestCase):
                     return transport
 
                 result = self.adapter(
-                    fresh_state(), factory
-                ).execute_named_sequence(
+                    state_reader,
+                    factory,
+                    sleep_fn=sleeps.append,
+                ).execute_scan(
                     action,
-                    (
-                        ("ready_arm_only", READY_ARM_TARGETS),
-                        ("scan_endpoint", endpoint),
-                    ),
+                    READY_ARM_TARGETS,
+                    endpoint["base"],
                 )
                 self.assertTrue(result["ok"])
                 self.assertEqual(
                     result["hardware_action"],
-                    "T102_SEQUENCE_RESPONSES_RECEIVED",
+                    "SCAN_COMMAND_RESPONSES_RECEIVED",
                 )
                 self.assertFalse(result["position_verified"])
+                self.assertEqual(sleeps, [3.0])
+                self.assertEqual(state_reader.call_count, 2)
                 self.assertEqual(len(transports), 2)
                 self.assertEqual(
                     transports[0].commands,
@@ -615,34 +676,38 @@ class ProductionAdapterTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     transports[-1].commands[0],
-                    full_t102(endpoint),
+                    {
+                        "T": 101,
+                        "joint": 1,
+                        "rad": endpoint["base"],
+                        "spd": 200,
+                        "acc": 10,
+                    },
                 )
 
     def test_named_sequence_propagates_uncertain_stage_outcome(self):
         ready_transport = FakeTransport()
         scan_transport = Mock()
-        scan_transport.move_joint.side_effect = requests.ReadTimeout(
+        scan_transport.move_base_scan.side_effect = requests.ReadTimeout(
             "scan response timeout"
         )
         transports = iter((ready_transport, scan_transport))
 
         result = self.adapter(
             fresh_state(), lambda: next(transports)
-        ).execute_named_sequence(
+        ).execute_scan(
             "scan_left_arm_only",
-            (
-                ("ready_arm_only", READY_ARM_TARGETS),
-                ("scan_left", SCAN_LEFT_BASE_TARGET),
-            ),
+            READY_ARM_TARGETS,
+            SCAN_LEFT_BASE_TARGET["base"],
         )
 
         self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
         self.assertTrue(result["authorized"])
         self.assertEqual(
             result["hardware_action"],
-            "T102_OUTCOME_UNCERTAIN",
+            "T101_OUTCOME_UNCERTAIN",
         )
-        self.assertEqual(result["uncertain_stage"], "scan_left")
+        self.assertEqual(result["uncertain_stage"], "base_scan")
         self.assertEqual(result["error"], "scan response timeout")
         self.assertEqual(result["error_type"], "ReadTimeout")
         self.assertTrue(result["results"][0]["ok"])
@@ -650,7 +715,7 @@ class ProductionAdapterTests(unittest.TestCase):
             result["results"][1]["reason"],
             "EXECUTION_OUTCOME_UNCERTAIN",
         )
-        scan_transport.move_joint.assert_called_once()
+        scan_transport.move_base_scan.assert_called_once_with(1.610679827)
         scan_transport.close.assert_called_once_with()
 
     def test_gripper_map_is_reported_but_not_activated(self):
@@ -731,19 +796,12 @@ class DelegationTests(unittest.TestCase):
         ):
             with self.subTest(filename=filename):
                 module = self.load_wrapper(filename)
-                module.execute_named_sequence = Mock(
-                    return_value={"ok": False}
-                )
+                module.execute_scan = Mock(return_value={"ok": False})
                 getattr(module, function_name)()
-                module.execute_named_sequence.assert_called_once_with(
+                module.execute_scan.assert_called_once_with(
                     action,
-                    (
-                        ("ready_arm_only", READY_ARM_TARGETS),
-                        (
-                            "scan_left" if "left" in action else "scan_right",
-                            endpoint,
-                        ),
-                    ),
+                    READY_ARM_TARGETS,
+                    endpoint["base"],
                 )
 
     def test_special_compatibility_wrappers_delegate(self):

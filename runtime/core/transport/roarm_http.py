@@ -9,6 +9,7 @@ import requests
 DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 HTTP_TIMEOUT_S = 5.0
 PRODUCTION_JOINTS = {"base", "shoulder", "elbow", "wrist"}
+SCAN_BASE_ENDPOINTS = {1.610679827, -1.578466231}
 ALL_STATE_JOINTS = {
     "base", "shoulder", "elbow", "wrist", "roll", "gripper"
 }
@@ -121,6 +122,24 @@ class RoArmProductionHttpTransport(RoArmHttpClient):
             "acc": 0,
         }
         return self._get(packet)
+
+    def move_base_scan(self, target):
+        if (
+            not isinstance(target, (int, float))
+            or isinstance(target, bool)
+            or not math.isfinite(target)
+            or float(target) not in SCAN_BASE_ENDPOINTS
+        ):
+            raise RoArmHttpError("SCAN_BASE_ENDPOINT_NOT_AUTHORIZED")
+        return self._get(
+            {
+                "T": 101,
+                "joint": 1,
+                "rad": float(target),
+                "spd": 200,
+                "acc": 10,
+            }
+        )
 
 
 def normalize_feedback(feedback, *, base_url=DEFAULT_HTTP_BASE_URL, now=None):

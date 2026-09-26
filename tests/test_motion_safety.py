@@ -290,6 +290,17 @@ class FakeTransport:
         self.commands.append(packet)
         return {"T": 102}
 
+    def move_base_scan(self, target):
+        packet = {
+            "T": 101,
+            "joint": 1,
+            "rad": target,
+            "spd": 200,
+            "acc": 10,
+        }
+        self.commands.append(packet)
+        return {"T": 101}
+
     def close(self):
         self.closed = True
 
@@ -373,6 +384,45 @@ class SupervisorTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(all(permit.consumed for permit in permits.values()))
+
+    def test_base_scan_consumes_one_permit_and_sends_fixed_t101(self):
+        with tempfile.TemporaryDirectory() as directory:
+            authority = LocalMotionAuthority(
+                audit_path=Path(directory) / "audit.jsonl"
+            )
+            target = 1.610679827
+            permit = authority.issue_permit(
+                current_state=state(),
+                joint="base",
+                target=target,
+                now=NOW,
+            )
+            transport = FakeTransport()
+            supervisor = mechanical_supervisor.MechanicalSupervisor(
+                transport=transport,
+                authority=authority,
+            )
+
+            supervisor.move_base_scan(
+                target,
+                permit=permit,
+                current_state=state(NOW + 1),
+                now=NOW + 1,
+            )
+
+            self.assertTrue(permit.consumed)
+            self.assertEqual(
+                transport.commands,
+                [
+                    {
+                        "T": 101,
+                        "joint": 1,
+                        "rad": target,
+                        "spd": 200,
+                        "acc": 10,
+                    }
+                ],
+            )
 
     def test_no_generic_command_api_or_automatic_setup_commands(self):
         supervisor = mechanical_supervisor.MechanicalSupervisor
