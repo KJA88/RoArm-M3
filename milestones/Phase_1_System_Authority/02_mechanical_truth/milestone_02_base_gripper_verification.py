@@ -10,13 +10,16 @@ import time
 from uuid import uuid4
 
 
-HTTP_TIMEOUT = 1.0
+HTTP_TIMEOUT = 5.0
 DEFAULT_HTTP_BASE_URL = "http://192.168.4.1"
 LOG_DIR = (
     Path(__file__).resolve().parents[3]
     / "runtime/core/calibration/logs"
 )
 BASE_STEPS = {0.01, 0.05}
+TORQUE_ON = "ON"
+TORQUE_OFF = "OFF"
+TORQUE_UNKNOWN = "UNKNOWN"
 GRIPPER_PRESETS = {
     "open": 1.6,
     "light": 2.0,
@@ -149,7 +152,7 @@ class BaseGripperVerification:
             raise ValueError("settle time must be finite and non-negative")
         self.sleep_fn = sleep_fn
         self.started = False
-        self.torque_enabled = False
+        self.torque_state = TORQUE_UNKNOWN
         self.motion_blocked = False
         self.state_unknown = False
         self.current_state = None
@@ -221,13 +224,23 @@ class BaseGripperVerification:
         self._require_started()
         if self.motion_blocked:
             raise VerificationError("MOTION_BLOCKED_RECOVERY_REQUIRED")
-        self._fixed_request(
-            {"T": 210, "cmd": 1},
-            "enable_torque",
-            lambda: self.transport.set_torque(True),
-        )
-        self.torque_enabled = True
-        self.log.record("torque_enabled")
+        try:
+            self._fixed_request(
+                {"T": 210, "cmd": 1},
+                "enable_torque",
+                lambda: self.transport.set_torque(True),
+            )
+        except Exception as exc:
+            self.torque_state = TORQUE_UNKNOWN
+            self.log.record(
+                "torque_command_failed",
+                requested_state=TORQUE_ON,
+                torque_state=TORQUE_UNKNOWN,
+                error=str(exc),
+            )
+            raise VerificationError("TORQUE_ENABLE_FAILED_STATE_UNKNOWN") from exc
+        self.torque_state = TORQUE_ON
+        self.log.record("torque_enabled", torque_state=TORQUE_ON)
 
     def disable_torque(self):
         try:
@@ -236,9 +249,17 @@ class BaseGripperVerification:
                 "disable_torque",
                 lambda: self.transport.set_torque(False),
             )
-            self.log.record("torque_disabled")
-        finally:
-            self.torque_enabled = False
+        except Exception as exc:
+            self.torque_state = TORQUE_UNKNOWN
+            self.log.record(
+                "torque_command_failed",
+                requested_state=TORQUE_OFF,
+                torque_state=TORQUE_UNKNOWN,
+                error=str(exc),
+            )
+            raise VerificationError("TORQUE_DISABLE_FAILED_STATE_UNKNOWN") from exc
+        self.torque_state = TORQUE_OFF
+        self.log.record("torque_disabled", torque_state=TORQUE_OFF)
 
     def recover_readback(self):
         if not self.started:
@@ -287,21 +308,24 @@ class BaseGripperVerification:
             request = lambda: self.transport.move_gripper(target)
         else:
             raise VerificationError("JOINT_NOT_ALLOWED")
-        self._fixed_request(packet, purpose, request)
+        try:
+            self._fixed_request(packet, purpose, request)
+        except Exception as exc:
+            self._block_motion_unknown(
+                reason="MOTION_COMMAND_FAILED",
+                purpose=purpose,
+                commanded_target=target,
+                error=str(exc),
+            )
+            raise VerificationError("MOTION_COMMAND_FAILED_STATE_UNKNOWN") from exc
         self.sleep_fn(self.settle_s)
         try:
             state = self._request_state(f"{purpose}_readback")
         except VerificationError:
-            self.motion_blocked = True
-            self.state_unknown = True
-            self.current_state = None
-            self.log.record(
-                "motion_blocked",
+            self._block_motion_unknown(
                 reason="POST_MOTION_READBACK_FAILED",
                 purpose=purpose,
                 commanded_target=target,
-                state="UNKNOWN",
-                torque_state="PRESERVED",
             )
             raise
 
@@ -316,6 +340,17 @@ class BaseGripperVerification:
         self.pending_confirmation = result
         self.log.record("motion_result", **result)
         return result
+
+    def _block_motion_unknown(self, **details):
+        self.motion_blocked = True
+        self.state_unknown = True
+        self.current_state = None
+        self.log.record(
+            "motion_blocked",
+            state="UNKNOWN",
+            torque_state=self.torque_state,
+            **details,
+        )
 
     def confirm_base(self, acceptable, note=""):
         pending = self._require_pending("base")
@@ -413,6 +448,7 @@ class BaseGripperVerification:
             "gripper_results": self.gripper_results,
             "motion_blocked": self.motion_blocked,
             "state_unknown": self.state_unknown,
+            "torque_state": self.torque_state,
         }
 
     def shutdown(self):
@@ -434,7 +470,9 @@ class BaseGripperVerification:
         if self.motion_blocked:
             raise VerificationError("MOTION_BLOCKED_RECOVERY_REQUIRED")
         self._require_started()
-        if not self.torque_enabled:
+        if self.torque_state == TORQUE_UNKNOWN:
+            raise VerificationError("TORQUE_STATE_UNKNOWN")
+        if self.torque_state != TORQUE_ON:
             raise VerificationError("TORQUE_NOT_ENABLED")
         if self.pending_confirmation is not None:
             raise VerificationError("OPERATOR_CONFIRMATION_REQUIRED")

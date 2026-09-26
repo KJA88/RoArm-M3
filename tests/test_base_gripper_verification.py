@@ -27,6 +27,8 @@ class FakeTransport:
         self.gripper = gripper
         self.calls = []
         self.fail_next_feedback = False
+        self.fail_torque_states = set()
+        self.fail_next_motion = False
         self.closed = False
 
     def read_state(self):
@@ -39,6 +41,9 @@ class FakeTransport:
     def set_torque(self, enabled):
         packet = {"T": 210, "cmd": 1 if enabled else 0}
         self.calls.append(packet)
+        if enabled in self.fail_torque_states:
+            self.fail_torque_states.remove(enabled)
+            raise requests.Timeout("simulated torque timeout")
         return {"T": 210}
 
     def move_base(self, target):
@@ -50,6 +55,9 @@ class FakeTransport:
             "acc": 0,
         }
         self.calls.append(packet)
+        if self.fail_next_motion:
+            self.fail_next_motion = False
+            raise requests.Timeout("simulated motion timeout")
         self.base = float(target)
         return {"T": 101}
 
@@ -62,6 +70,9 @@ class FakeTransport:
             "acc": 0,
         }
         self.calls.append(packet)
+        if self.fail_next_motion:
+            self.fail_next_motion = False
+            raise requests.Timeout("simulated motion timeout")
         self.gripper = float(target)
         return {"T": 101}
 
@@ -165,7 +176,7 @@ class VerificationToolTests(unittest.TestCase):
             self.assertEqual(parsed.scheme, "http")
             self.assertEqual(parsed.netloc, "192.168.4.1")
             self.assertEqual(parsed.path, "/js")
-            self.assertEqual(timeout, 1.0)
+            self.assertEqual(timeout, 5.0)
 
     def test_tool_has_no_serial_or_generic_command_api(self):
         source = TOOL_PATH.read_text(encoding="utf-8")
@@ -196,7 +207,7 @@ class VerificationToolTests(unittest.TestCase):
         ):
             session.startup()
         self.assertFalse(session.started)
-        self.assertFalse(session.torque_enabled)
+        self.assertEqual(session.torque_state, tool.TORQUE_UNKNOWN)
         self.assertEqual(
             [command for _, command, _ in http.requests],
             [{"T": 105}],
@@ -233,8 +244,70 @@ class VerificationToolTests(unittest.TestCase):
     def test_startup_is_read_only_and_does_not_enable_torque(self):
         session, transport = self.started_session()
         self.assertEqual(transport.calls, [{"T": 105}])
-        self.assertFalse(session.torque_enabled)
+        self.assertEqual(session.torque_state, tool.TORQUE_UNKNOWN)
         session.shutdown()
+
+    def test_successful_enable_sets_torque_on(self):
+        session, _ = self.started_session()
+
+        session.enable_torque()
+
+        self.assertEqual(session.torque_state, tool.TORQUE_ON)
+
+    def test_successful_disable_sets_torque_off(self):
+        session, _ = self.started_session()
+
+        session.disable_torque()
+
+        self.assertEqual(session.torque_state, tool.TORQUE_OFF)
+
+    def test_enable_timeout_is_handled_and_sets_torque_unknown(self):
+        session, transport = self.session()
+        transport.fail_torque_states.add(True)
+        commands = iter(["enable", "quit"])
+        output = []
+
+        tool.run_interactive(
+            session,
+            input_fn=lambda _: next(commands),
+            output=output.append,
+        )
+
+        self.assertEqual(session.torque_state, tool.TORQUE_UNKNOWN)
+        self.assertIn(
+            "DENIED: TORQUE_ENABLE_FAILED_STATE_UNKNOWN",
+            output,
+        )
+        self.assertEqual(
+            transport.calls,
+            [{"T": 105}, {"T": 210, "cmd": 1}],
+        )
+
+    def test_disable_timeout_is_handled_and_sets_torque_unknown(self):
+        session, transport = self.session()
+        transport.fail_torque_states.add(False)
+        commands = iter(["enable", "disable", "quit"])
+        output = []
+
+        tool.run_interactive(
+            session,
+            input_fn=lambda _: next(commands),
+            output=output.append,
+        )
+
+        self.assertEqual(session.torque_state, tool.TORQUE_UNKNOWN)
+        self.assertIn(
+            "DENIED: TORQUE_DISABLE_FAILED_STATE_UNKNOWN",
+            output,
+        )
+        self.assertEqual(
+            transport.calls,
+            [
+                {"T": 105},
+                {"T": 210, "cmd": 1},
+                {"T": 210, "cmd": 0},
+            ],
+        )
 
     def test_base_jog_commands_only_joint_one(self):
         session, transport = self.started_session()
@@ -290,7 +363,7 @@ class VerificationToolTests(unittest.TestCase):
         self.assertTrue(session.motion_blocked)
         self.assertTrue(session.state_unknown)
         self.assertIsNone(session.current_state)
-        self.assertTrue(session.torque_enabled)
+        self.assertEqual(session.torque_state, tool.TORQUE_ON)
         self.assertNotIn({"T": 210, "cmd": 0}, transport.calls)
         with self.assertRaisesRegex(
             tool.VerificationError, "MOTION_BLOCKED_RECOVERY_REQUIRED"
@@ -303,6 +376,41 @@ class VerificationToolTests(unittest.TestCase):
         self.assertFalse(session.state_unknown)
         session.shutdown()
         self.assertNotIn({"T": 210, "cmd": 0}, transport.calls)
+
+    def test_motion_timeout_blocks_without_retry_or_torque_change(self):
+        session, transport = self.started_session()
+        session.enable_torque()
+        transport.fail_next_motion = True
+
+        with self.assertRaisesRegex(
+            tool.VerificationError, "MOTION_COMMAND_FAILED_STATE_UNKNOWN"
+        ):
+            session.move_gripper(2.4)
+
+        self.assertTrue(session.motion_blocked)
+        self.assertTrue(session.state_unknown)
+        self.assertIsNone(session.current_state)
+        self.assertEqual(session.torque_state, tool.TORQUE_ON)
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
+        self.assertEqual(len(motion), 1)
+        self.assertNotIn({"T": 210, "cmd": 0}, transport.calls)
+
+    def test_unknown_torque_blocks_motion_until_explicitly_resolved(self):
+        session, transport = self.started_session()
+
+        with self.assertRaisesRegex(
+            tool.VerificationError, "TORQUE_STATE_UNKNOWN"
+        ):
+            session.jog_base(0.01)
+        self.assertFalse(
+            any(packet["T"] == 101 for packet in transport.calls)
+        )
+
+        session.recover_readback()
+        with self.assertRaisesRegex(
+            tool.VerificationError, "TORQUE_STATE_UNKNOWN"
+        ):
+            session.jog_base(0.01)
 
     def test_ctrl_c_path_does_not_disable_torque(self):
         session, transport = self.session()
