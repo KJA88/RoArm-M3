@@ -292,6 +292,38 @@ Approaching the same nominal pose from below can behave differently from approac
 
 Many joint configurations can achieve the same nominal Z or Cartesian location.
 
+High-acceleration moves can cause the arm to rock mechanically after commanded motion stops. Differences between early and later T105 snapshots may therefore include residual oscillation and must not automatically be interpreted as static sag or drift.
+
+Stored Speed And Acceleration Documentation
+
+These statements come from files already in the repository. They do not change the packets currently sent.
+
+Manufacturer Python API, docs/01_REFERENCE_EXTERNAL/roarm_m3_en.md:
+
+Joint and gripper control functions document speed as an integer in [1, 4096], unit step/s, and acceleration as an integer in [1, 254], unit step/s^2. The opening example uses 1000 step/s and 50 steps/s^2. The joint_radian_ctrl acceleration line is truncated in that file as "step/s^"; the other joint and gripper functions say step/s^2.
+
+pose_ctrl(pose), in section 4, takes only the pose list. That manufacturer section documents no speed parameter and no acceleration parameter.
+
+The manufacturer file does not define spd=0, acc=0, or a JSON T-code mapping.
+
+Internal protocol notes, docs/02_NOTES_INTERNAL/roarm_kinematics_control_log.json:
+
+T101 and T102 templates include spd and acc, with example values spd 0 and acc 10. Those notes do not define the meaning, units, or zero behavior.
+
+The T104 template includes spd, with example value 0.25, and does not include acc. Its note says the command blocks until done. T1041 includes neither spd nor acc.
+
+docs/01_REFERENCE_EXTERNAL/command_cheatsheet.md section 7 shows one T102 example with spd 0 and acc 0. It does not define those fields.
+
+Current production packets:
+
+READY T102 uses spd 0 and acc 0. Those values match the cheatsheet example. They are outside the only numeric ranges documented by the manufacturer joint API, and this repository does not document what zero means.
+
+Named T104 uses spd 0.5. That value is inherited from milestone_04_supervisor.py and milestone_05_reachability.py. The manufacturer pose_ctrl section does not document it. The internal T104 note does not define its unit or say that a lower value is gentler.
+
+Demonstrated base-scan T101 uses spd 200 and acc 10. Those numbers lie inside the manufacturer joint ranges [1, 4096] and [1, 254]. The stored files do not say that this scan packet was selected from those ranges, and they do not define its motion as slower or gentler.
+
+No stored manufacturer section documents a supported T104 acceleration field. No stored section documents that lowering spd or acc reduces post-stop rocking.
+
 Definition of Done (Acceptance Criteria)
 
 Milestone 05 is DONE only if all conditions are met:
