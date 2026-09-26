@@ -32,6 +32,18 @@ def _denied(action, reason, **details):
     }
 
 
+def _uncertain(action, **details):
+    return {
+        "ok": False,
+        "authorized": True,
+        "action": action,
+        "reason": "EXECUTION_OUTCOME_UNCERTAIN",
+        "hardware_action": "T102_OUTCOME_UNCERTAIN",
+        "position_verified": False,
+        **details,
+    }
+
+
 def _has_finite_joints(current_state, required):
     joints = current_state.get("joints") if isinstance(current_state, dict) else None
     return isinstance(joints, dict) and all(
@@ -120,9 +132,20 @@ class ProductionMotionAdapter:
                 "permit_id": permit.permit_id,
                 "permit_consumed": permit.consumed,
                 "response": response,
-                "hardware_action": "PARTIAL_T102_EXECUTED",
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
             }
         except Exception as exc:
+            if permit.consumed:
+                return _uncertain(
+                    action,
+                    joint=joint,
+                    target=target,
+                    permit_id=permit.permit_id,
+                    permit_consumed=True,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
             return _denied(
                 action,
                 "EXECUTION_FAILED",
@@ -200,9 +223,24 @@ class ProductionMotionAdapter:
                     permit.consumed for permit in permits.values()
                 ),
                 "response": response,
-                "hardware_action": "ARM_ONLY_T102_EXECUTED",
+                "hardware_action": "T102_RESPONSE_RECEIVED",
+                "position_verified": False,
             }
         except Exception as exc:
+            permits_consumed = all(
+                permit.consumed for permit in permits.values()
+            )
+            if permits_consumed:
+                return _uncertain(
+                    name,
+                    permit_ids={
+                        joint: permit.permit_id
+                        for joint, permit in permits.items()
+                    },
+                    permits_consumed=True,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
             return _denied(
                 name,
                 "EXECUTION_FAILED",
@@ -210,10 +248,9 @@ class ProductionMotionAdapter:
                     joint: permit.permit_id
                     for joint, permit in permits.items()
                 },
-                permits_consumed=all(
-                    permit.consumed for permit in permits.values()
-                ),
+                permits_consumed=False,
                 error=str(exc),
+                error_type=type(exc).__name__,
             )
         finally:
             if transport is not None:
@@ -262,6 +299,27 @@ class ProductionMotionAdapter:
             result["stage"] = stage_name
             results.append(result)
             if not result["ok"]:
+                if result.get("reason") == "EXECUTION_OUTCOME_UNCERTAIN":
+                    return _uncertain(
+                        name,
+                        uncertain_stage=stage_name,
+                        results=results,
+                        error=result.get("error"),
+                        error_type=result.get("error_type"),
+                    )
+                if any(completed.get("ok") for completed in results[:-1]):
+                    return {
+                        "ok": False,
+                        "authorized": True,
+                        "action": name,
+                        "reason": "POSE_EXECUTION_INCOMPLETE",
+                        "hardware_action": (
+                            "T102_SEQUENCE_PARTIAL_RESPONSES_RECEIVED"
+                        ),
+                        "position_verified": False,
+                        "failed_stage": stage_name,
+                        "results": results,
+                    }
                 return _denied(
                     name, "POSE_EXECUTION_FAILED", results=results
                 )
@@ -270,7 +328,8 @@ class ProductionMotionAdapter:
             "authorized": True,
             "action": name,
             "results": results,
-            "hardware_action": "NAMED_POSE_EXECUTED",
+            "hardware_action": "T102_SEQUENCE_RESPONSES_RECEIVED",
+            "position_verified": False,
         }
 
     def unsupported(self, action, reason="POLICY_NOT_VERIFIED", **details):

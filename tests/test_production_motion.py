@@ -368,6 +368,8 @@ class ProductionAdapterTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["permit_consumed"])
+        self.assertEqual(result["hardware_action"], "T102_RESPONSE_RECEIVED")
+        self.assertFalse(result["position_verified"])
         self.assertTrue(transport.closed)
         self.assertEqual(len(transport.commands), 1)
         self.assertEqual(
@@ -402,7 +404,15 @@ class ProductionAdapterTests(unittest.TestCase):
             fresh_state(), lambda: transport
         ).execute_joint("elbow", 1.0)
 
-        self.assertEqual(result["reason"], "EXECUTION_FAILED")
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertTrue(result["authorized"])
+        self.assertEqual(
+            result["hardware_action"],
+            "T102_OUTCOME_UNCERTAIN",
+        )
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(result["error"], "simulated motion timeout")
+        self.assertEqual(result["error_type"], "Timeout")
         self.assertTrue(result["permit_consumed"])
         transport.move_joint.assert_called_once_with(
             "elbow",
@@ -427,7 +437,15 @@ class ProductionAdapterTests(unittest.TestCase):
             fresh_state(), lambda: transport
         ).execute_named_pose("test_arm_only", targets)
 
-        self.assertEqual(result["reason"], "EXECUTION_FAILED")
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertTrue(result["authorized"])
+        self.assertEqual(
+            result["hardware_action"],
+            "T102_OUTCOME_UNCERTAIN",
+        )
+        self.assertFalse(result["position_verified"])
+        self.assertEqual(result["error"], "simulated pose timeout")
+        self.assertEqual(result["error_type"], "Timeout")
         self.assertTrue(result["permits_consumed"])
         transport.move_arm_pose.assert_called_once_with(
             targets,
@@ -435,6 +453,18 @@ class ProductionAdapterTests(unittest.TestCase):
             hand=3.13545673,
         )
         transport.close.assert_called_once_with()
+
+    def test_transport_factory_failure_reports_no_hardware_action(self):
+        result = self.adapter(
+            fresh_state(),
+            Mock(side_effect=RuntimeError("transport unavailable")),
+        ).execute_joint("elbow", 1.0)
+
+        self.assertEqual(result["reason"], "EXECUTION_FAILED")
+        self.assertFalse(result["authorized"])
+        self.assertEqual(result["hardware_action"], "NONE")
+        self.assertFalse(result["permit_consumed"])
+        self.assertEqual(result["error"], "transport unavailable")
 
     def test_invalid_arm_pose_fails_before_transport_opens(self):
         factory = Mock(side_effect=AssertionError("transport must stay closed"))
@@ -539,6 +569,11 @@ class ProductionAdapterTests(unittest.TestCase):
                 ).execute_named_pose(action, targets)
                 self.assertTrue(result["ok"])
                 self.assertTrue(result["permits_consumed"])
+                self.assertEqual(
+                    result["hardware_action"],
+                    "T102_RESPONSE_RECEIVED",
+                )
+                self.assertFalse(result["position_verified"])
                 self.assertEqual(len(transports), 1)
                 self.assertEqual(
                     transports[0].commands,
@@ -568,6 +603,11 @@ class ProductionAdapterTests(unittest.TestCase):
                     ),
                 )
                 self.assertTrue(result["ok"])
+                self.assertEqual(
+                    result["hardware_action"],
+                    "T102_SEQUENCE_RESPONSES_RECEIVED",
+                )
+                self.assertFalse(result["position_verified"])
                 self.assertEqual(len(transports), 2)
                 self.assertEqual(
                     transports[0].commands,
@@ -577,6 +617,41 @@ class ProductionAdapterTests(unittest.TestCase):
                     transports[-1].commands[0],
                     full_t102(endpoint),
                 )
+
+    def test_named_sequence_propagates_uncertain_stage_outcome(self):
+        ready_transport = FakeTransport()
+        scan_transport = Mock()
+        scan_transport.move_joint.side_effect = requests.ReadTimeout(
+            "scan response timeout"
+        )
+        transports = iter((ready_transport, scan_transport))
+
+        result = self.adapter(
+            fresh_state(), lambda: next(transports)
+        ).execute_named_sequence(
+            "scan_left_arm_only",
+            (
+                ("ready_arm_only", READY_ARM_TARGETS),
+                ("scan_left", SCAN_LEFT_BASE_TARGET),
+            ),
+        )
+
+        self.assertEqual(result["reason"], "EXECUTION_OUTCOME_UNCERTAIN")
+        self.assertTrue(result["authorized"])
+        self.assertEqual(
+            result["hardware_action"],
+            "T102_OUTCOME_UNCERTAIN",
+        )
+        self.assertEqual(result["uncertain_stage"], "scan_left")
+        self.assertEqual(result["error"], "scan response timeout")
+        self.assertEqual(result["error_type"], "ReadTimeout")
+        self.assertTrue(result["results"][0]["ok"])
+        self.assertEqual(
+            result["results"][1]["reason"],
+            "EXECUTION_OUTCOME_UNCERTAIN",
+        )
+        scan_transport.move_joint.assert_called_once()
+        scan_transport.close.assert_called_once_with()
 
     def test_gripper_map_is_reported_but_not_activated(self):
         result = self.adapter(fresh_state(), Mock()).gripper_finding("open")
