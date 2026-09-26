@@ -325,6 +325,63 @@ class VerificationToolTests(unittest.TestCase):
         session.confirm_base(True, "clear")
         session.shutdown()
 
+    def test_coarse_positive_base_jog_is_relative_0_25(self):
+        session, transport = self.started_session()
+        session.enable_torque()
+
+        session.jog_base(0.25)
+
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
+        self.assertEqual(
+            motion,
+            [{"T": 101, "joint": 1, "rad": 0.5, "spd": 50, "acc": 0}],
+        )
+
+    def test_coarse_negative_base_jog_is_relative_minus_0_25(self):
+        session, transport = self.started_session()
+        session.enable_torque()
+
+        session.jog_base(-0.25)
+
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
+        self.assertEqual(
+            motion,
+            [{"T": 101, "joint": 1, "rad": 0.0, "spd": 50, "acc": 0}],
+        )
+
+    def test_fine_and_normal_base_jogs_still_work(self):
+        session, transport = self.started_session()
+        session.enable_torque()
+
+        session.jog_base(0.01)
+        session.confirm_base(True)
+        session.jog_base(0.05)
+
+        motion = [packet for packet in transport.calls if packet["T"] == 101]
+        self.assertEqual(
+            motion,
+            [
+                {"T": 101, "joint": 1, "rad": 0.26, "spd": 50, "acc": 0},
+                {"T": 101, "joint": 1, "rad": 0.31, "spd": 50, "acc": 0},
+            ],
+        )
+
+    def test_base_jog_confirmation_does_not_prompt_for_note(self):
+        session, _ = self.started_session()
+        session.enable_torque()
+        answers = iter(["c+", "yes", "back"])
+        prompts = []
+
+        def operator_input(prompt):
+            prompts.append(prompt)
+            return next(answers)
+
+        tool._base_mode(session, operator_input, lambda _: None)
+
+        self.assertNotIn("Observation note: ", prompts)
+        self.assertEqual(session.last_base_confirmation["note"], "")
+        self.assertTrue(session.last_base_confirmation["acceptable"])
+
     def test_gripper_commands_only_joint_six(self):
         session, transport = self.started_session()
         session.enable_torque()

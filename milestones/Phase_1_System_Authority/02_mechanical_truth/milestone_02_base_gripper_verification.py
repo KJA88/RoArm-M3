@@ -16,7 +16,7 @@ LOG_DIR = (
     Path(__file__).resolve().parents[3]
     / "runtime/core/calibration/logs"
 )
-BASE_STEPS = {0.01, 0.05}
+BASE_STEPS = {0.01, 0.05, 0.25}
 TORQUE_ON = "ON"
 TORQUE_OFF = "OFF"
 TORQUE_UNKNOWN = "UNKNOWN"
@@ -274,7 +274,7 @@ class BaseGripperVerification:
     def jog_base(self, delta):
         self._require_motion_ready()
         if not _finite(delta) or abs(float(delta)) not in BASE_STEPS:
-            raise VerificationError("BASE_JOG_MUST_BE_0.01_OR_0.05")
+            raise VerificationError("BASE_JOG_MUST_BE_0.01_0.05_OR_0.25")
         target = self.current_state["base"] + float(delta)
         return self._move_isolated(
             joint_id=1,
@@ -490,24 +490,29 @@ def _yes(prompt, input_fn):
 
 def _confirm_base(session, input_fn, output):
     acceptable = _yes("Physically acceptable? [y/N]: ", input_fn)
-    note = input_fn("Observation note: ").strip()
-    result = session.confirm_base(acceptable, note)
+    result = session.confirm_base(acceptable)
     output(json.dumps(result, indent=2))
 
 
 def _base_mode(session, input_fn, output):
     output(
-        "Base: +=+0.05, -=-0.05, f+=+0.01, f-=-0.01, "
+        "Base: c+=+0.25, c-=-0.25, +=+0.05, -=-0.05, "
+        "f+=+0.01, f-=-0.01, "
         "negative/positive=record candidate, back"
     )
     while True:
         command = input_fn("base> ").strip().lower()
         if command == "back":
             return
-        if command in {"+", "-", "f+", "f-"}:
-            delta = {"+": 0.05, "-": -0.05, "f+": 0.01, "f-": -0.01}[
-                command
-            ]
+        if command in {"c+", "c-", "+", "-", "f+", "f-"}:
+            delta = {
+                "c+": 0.25,
+                "c-": -0.25,
+                "+": 0.05,
+                "-": -0.05,
+                "f+": 0.01,
+                "f-": -0.01,
+            }[command]
             output(json.dumps(session.jog_base(delta), indent=2))
             _confirm_base(session, input_fn, output)
         elif command in {"negative", "positive"}:
