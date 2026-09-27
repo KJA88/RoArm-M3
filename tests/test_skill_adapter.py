@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from runtime.core.safety.pattern_commands import pattern_pi_entry_scope
+from runtime.core.safety.pattern_commands import RUNTIME_DIR, pattern_pi_entry_scope
 from runtime.core.safety.skill_adapter import engineering, move_pose, run_named, stop_motion
 
 GOOD_ROUTE = "192.168.4.1 dev wlan0 src 192.168.4.2 uid 1000 cache"
@@ -83,6 +83,20 @@ class SkillAdapterTests(unittest.TestCase):
             )
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "PACKET_NOT_IN_HTTP_PLANE")
+
+    def test_stop_and_status_use_the_shared_runtime_dir(self):
+        self.assertEqual(RUNTIME_DIR, Path("/home/KA_PI/syzygy-runtime/roarm"))
+        self.assertFalse(str(RUNTIME_DIR).startswith("/tmp"))
+        self.assertEqual(RUNTIME_DIR / "transport-status.json", Path("/home/KA_PI/syzygy-runtime/roarm/transport-status.json"))
+        with tempfile.TemporaryDirectory() as runtime:
+            result = stop_motion(
+                runtime_dir=runtime,
+                pid_alive=lambda _pid: False,
+                signal_pid=lambda _pid: None,
+            )
+            self.assertTrue(result["ok"])
+            self.assertTrue((Path(runtime) / "stop").is_file())
+            self.assertFalse((Path("/tmp/roarm-pattern-command") / "stop").exists())
 
 
 if __name__ == "__main__":

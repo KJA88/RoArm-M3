@@ -34,7 +34,7 @@ from runtime.core.safety.pattern_registry import (
 from runtime.core.safety.production_motion import ProductionMotionAdapter
 
 
-RUNTIME_DIR = Path("/tmp/roarm-pattern-command")
+RUNTIME_DIR = Path("/home/KA_PI/syzygy-runtime/roarm")
 LOCAL_EXECUTION_ENV = "ROARM_PATTERN_EXECUTE_LOCAL"
 REMOTE_TREE = "~/roarm-m3-pattern-cmd"
 _ENTRY = "runtime/core/safety/pattern_command_pi_entry.py"
