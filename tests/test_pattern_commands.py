@@ -7,6 +7,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from runtime.core.safety.existing_motions import READY_TARGETS
 from runtime.core.safety.pattern_commands import (
@@ -14,6 +15,7 @@ from runtime.core.safety.pattern_commands import (
     TRAJECTORY_PI_IP,
     TRAJECTORY_RELEASE_WAIT_S,
     TRAJECTORY_UDP_PORT,
+    PatternHttpSession,
     dispatch_pattern_command,
     execute_pattern_locally,
     format_inventory,
@@ -841,6 +843,179 @@ class PatternCommandTests(unittest.TestCase):
                     "settle_s": 0.5,
                 },
             )
+
+    def _seed_prior_status(self, runtime):
+        prior = {
+            "pattern": "spiral",
+            "transport_state": "idle",
+            "active": False,
+            "stream_id": 4,
+            "last_sequence": 300,
+            "active_failure": "PATTERN_UDP_LATE",
+            "failure_detail": "old failure",
+            "last_completion": {
+                "pattern": "spiral",
+                "stream_id": 4,
+                "sequence": 300,
+            },
+            "last_late": {"sequence": 3, "detail": "old late"},
+            "last_failed": {"sequence": 1, "detail": "old fail"},
+            "serial_fallback": False,
+        }
+        path = Path(runtime) / "transport-status.json"
+        path.write_text(json.dumps(prior), encoding="utf-8")
+        return path
+
+    def _run_in(self, runtime, name, sock=None, on_send=None, stream_id=11):
+        class Clock:
+            def __init__(self):
+                self.now = 0.0
+
+            def __call__(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += float(seconds)
+
+        clock = Clock()
+        udp = sock or FakeUdp()
+        if on_send is not None:
+            def send(payload):
+                on_send(payload)
+                udp.sent.append(payload)
+                return len(payload)
+
+            udp.send = send
+        with pattern_pi_entry_scope():
+            return execute_pattern_locally(
+                ["run", name],
+                route_text=GOOD_ROUTE,
+                state_reader=lambda: dict(FRESH),
+                sleep_fn=clock.sleep,
+                clock=clock,
+                transport_factory=lambda: FakeClient(),
+                pattern_root=ROOT,
+                runtime_dir=runtime,
+                pid_alive=lambda _pid: False,
+                udp_socket_factory=lambda: udp,
+                stream_id_factory=lambda: stream_id,
+            )
+
+    def test_new_stream_does_not_keep_the_previous_sequence(self):
+        with tempfile.TemporaryDirectory() as runtime:
+            status_path = self._seed_prior_status(runtime)
+            seen = {}
+
+            def on_send(_payload):
+                if "during" not in seen:
+                    seen["during"] = json.loads(
+                        status_path.read_text(encoding="utf-8")
+                    )
+
+            self._run_in(runtime, "lissajous", on_send=on_send, stream_id=11)
+            during = seen["during"]
+            self.assertEqual(during["pattern"], "lissajous")
+            self.assertTrue(during["active"])
+            self.assertEqual(during["transport_state"], "udp")
+            self.assertIsNone(during["last_sequence"])
+            self.assertEqual(during["last_completion"]["pattern"], "spiral")
+            self.assertEqual(during["last_late"]["detail"], "old late")
+            self.assertEqual(during["last_failed"]["detail"], "old fail")
+
+    def test_new_run_does_not_keep_the_previous_failure(self):
+        with tempfile.TemporaryDirectory() as runtime:
+            status_path = self._seed_prior_status(runtime)
+            seen = {}
+
+            def on_send(_payload):
+                if "during" not in seen:
+                    seen["during"] = json.loads(
+                        status_path.read_text(encoding="utf-8")
+                    )
+
+            self._run_in(runtime, "lissajous", on_send=on_send, stream_id=12)
+            during = seen["during"]
+            self.assertIsNone(during["active_failure"])
+            self.assertIsNone(during["failure_detail"])
+            self.assertEqual(during["last_late"]["detail"], "old late")
+            self.assertEqual(during["last_failed"]["detail"], "old fail")
+
+    def test_consecutive_patterns_replace_the_pattern_name(self):
+        with tempfile.TemporaryDirectory() as runtime:
+            status_path = self._seed_prior_status(runtime)
+            self._run_in(runtime, "lissajous", stream_id=13)
+            after_lissajous = json.loads(status_path.read_text(encoding="utf-8"))
+            self.assertEqual(after_lissajous["pattern"], "lissajous")
+            self._run_in(runtime, "candle", stream_id=14)
+            after_candle = json.loads(status_path.read_text(encoding="utf-8"))
+            self.assertEqual(after_candle["pattern"], "candle")
+            self.assertEqual(after_candle["last_completion"]["pattern"], "lissajous")
+            self.assertIsNone(after_candle["last_sequence"])
+            self.assertIsNone(after_candle["active_failure"])
+            self.assertEqual(after_candle["last_late"]["detail"], "old late")
+
+    def test_transport_status_publication_is_atomic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = PatternHttpSession(
+                None,
+                Path(tmp) / "stop",
+                lambda _seconds: None,
+                lambda: 0.0,
+                pattern_name="lissajous",
+            )
+            session._publish_transport(
+                transport_state="idle",
+                active=False,
+                stream_id=1,
+                last_sequence=3,
+            )
+            replaced = {}
+            real_replace = os.replace
+            real_fsync = os.fsync
+
+            def spy_replace(src, dst):
+                replaced["temp"] = Path(src).read_text(encoding="utf-8")
+                replaced["dest_before"] = Path(dst).read_text(encoding="utf-8")
+                return real_replace(src, dst)
+
+            def spy_fsync(fd):
+                replaced["fsynced"] = True
+                return real_fsync(fd)
+
+            with patch(
+                "runtime.core.safety.pattern_commands.os.replace",
+                side_effect=spy_replace,
+            ), patch(
+                "runtime.core.safety.pattern_commands.os.fsync",
+                side_effect=spy_fsync,
+            ):
+                session._publish_transport(
+                    transport_state="udp",
+                    active=True,
+                    stream_id=2,
+                    last_sequence=None,
+                    active_failure=None,
+                    failure_detail=None,
+                )
+            self.assertTrue(replaced["fsynced"])
+            self.assertEqual(json.loads(replaced["dest_before"])["stream_id"], 1)
+            temp = json.loads(replaced["temp"])
+            self.assertEqual(temp["stream_id"], 2)
+            self.assertIsNone(temp["last_sequence"])
+            final = json.loads(
+                (Path(tmp) / "transport-status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(final, temp)
+            self.assertEqual(list(Path(tmp).glob(".transport-status-*")), [])
+            loop = (
+                Path(pattern_transport.__code__.co_filename)
+                .read_text(encoding="utf-8")
+                .split("for index, step in enumerate(steps):", 1)[1]
+                .split("finally:", 1)[0]
+            )
+            self.assertNotIn("_publish_transport", loop)
+            self.assertNotIn("_write_json_atomic", loop)
+            self.assertNotIn("mkstemp", loop)
 
     def test_command_modules_do_not_run_lesson_scripts(self):
         commands = (

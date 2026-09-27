@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -409,6 +410,21 @@ class TrajectoryUdpLink:
             close()
 
 
+def _write_json_atomic(path, payload):
+    """Replace the status file only after a flushed, durable temp write."""
+    directory = Path(path).parent
+    fd, temporary = tempfile.mkstemp(prefix=".transport-status-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class PatternHttpSession:
     """HTTP for discrete poses. UDP for a continuous pattern."""
 
@@ -429,6 +445,13 @@ class PatternHttpSession:
         return self.stop_path.is_file()
 
     def execute(self, steps):
+        self._publish_transport(
+            transport_state="idle",
+            active=False,
+            last_sequence=None,
+            active_failure=None,
+            failure_detail=None,
+        )
         try:
             if self.udp_link is not None:
                 self._execute_udp(steps)
@@ -459,7 +482,7 @@ class PatternHttpSession:
             current = {}
         current.update(fields)
         if self.pattern_name:
-            current.setdefault("pattern", self.pattern_name)
+            current["pattern"] = self.pattern_name
         current["serial_fallback"] = False
         current["udp_target"] = f"{TRAJECTORY_ARM_IP}:{TRAJECTORY_UDP_PORT}"
         if current.get("transport_state") not in ("idle", "http", "udp"):
@@ -469,10 +492,7 @@ class PatternHttpSession:
         )
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(current, separators=(",", ":")),
-                encoding="utf-8",
-            )
+            _write_json_atomic(path, current)
         except OSError:
             return
 
@@ -596,7 +616,9 @@ class PatternHttpSession:
             transport_state="udp",
             active=True,
             stream_id=sid,
+            last_sequence=None,
             active_failure=None,
+            failure_detail=None,
         )
         origin = self.clock()
         last_seq = None
