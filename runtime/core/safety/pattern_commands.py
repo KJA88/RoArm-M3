@@ -18,7 +18,9 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -408,15 +410,31 @@ class TrajectoryUdpLink:
             close()
 
 
+def _write_json_atomic(path, payload):
+    """Replace the status file only after a flushed, durable temp write."""
+    directory = Path(path).parent
+    fd, temporary = tempfile.mkstemp(prefix=".transport-status-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class PatternHttpSession:
     """HTTP for discrete poses. UDP for a continuous pattern."""
 
-    def __init__(self, client, stop_path, sleep_fn, clock, udp_link=None):
+    def __init__(self, client, stop_path, sleep_fn, clock, udp_link=None, pattern_name=None):
         self.client = client
         self.stop_path = Path(stop_path)
         self.sleep_fn = sleep_fn
         self.clock = clock
         self.udp_link = udp_link
+        self.pattern_name = pattern_name
         self.sent = []
         self.arm_packets = 0
         self.error = None
@@ -427,12 +445,94 @@ class PatternHttpSession:
         return self.stop_path.is_file()
 
     def execute(self, steps):
-        if self.udp_link is not None:
-            self._execute_udp(steps)
+        self._publish_transport(
+            transport_state="idle",
+            active=False,
+            last_sequence=None,
+            active_failure=None,
+            failure_detail=None,
+        )
+        try:
+            if self.udp_link is not None:
+                self._execute_udp(steps)
+                return
+            self._execute_http(steps)
+        finally:
+            self._publish_transport(transport_state="idle", active=False)
+
+    def _status_path(self):
+        return Path(self.stop_path).parent / "transport-status.json"
+
+    def _publish_transport(self, **fields):
+        """Record link facts for Guardian. This is not on the UDP point loop."""
+        if fields.get("transport_state") == "serial":
+            fields = dict(fields)
+            fields["transport_state"] = "idle"
+            fields["active"] = False
+            fields["active_failure"] = "ROARM_SERIAL_REJECTED"
+            fields["failure_detail"] = "USB/serial is not a RoArm runtime path"
+        directory = Path(self.stop_path).parent
+        path = self._status_path()
+        current = {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                current = loaded
+        except (OSError, ValueError, TypeError):
+            current = {}
+        current.update(fields)
+        if self.pattern_name:
+            current["pattern"] = self.pattern_name
+        current["serial_fallback"] = False
+        current["udp_target"] = f"{TRAJECTORY_ARM_IP}:{TRAJECTORY_UDP_PORT}"
+        if current.get("transport_state") not in ("idle", "http", "udp"):
+            current["transport_state"] = "idle"
+        current["updated_at"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            _write_json_atomic(path, current)
+        except OSError:
             return
-        self._execute_http(steps)
+
+    def _publish_stream_end(self, sid, last_seq, sent_any):
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        fields = {
+            "transport_state": "idle",
+            "active": False,
+            "stream_id": sid,
+            "last_sequence": last_seq,
+        }
+        if self.error == "PATTERN_UDP_LATE":
+            fields["active_failure"] = "PATTERN_UDP_LATE"
+            fields["failure_detail"] = self.error_detail
+            fields["last_late"] = {
+                "at": stamp,
+                "sequence": last_seq,
+                "detail": self.error_detail,
+            }
+        elif self.error == "PATTERN_UDP_FAILED":
+            fields["active_failure"] = "PATTERN_UDP_FAILED"
+            fields["failure_detail"] = self.error_detail
+            fields["last_failed"] = {
+                "at": stamp,
+                "sequence": last_seq,
+                "detail": self.error_detail,
+            }
+        elif self.error is None and sent_any:
+            fields["active_failure"] = None
+            fields["failure_detail"] = None
+            fields["last_completion"] = {
+                "at": stamp,
+                "pattern": self.pattern_name,
+                "stream_id": sid,
+                "sequence": last_seq,
+            }
+        self._publish_transport(**fields)
 
     def _execute_http(self, steps):
+        self._publish_transport(transport_state="http", active=True)
         for step in steps:
             if self._stopped():
                 self.stopped = True
@@ -491,6 +591,7 @@ class PatternHttpSession:
                     if self.error:
                         return
                     continue
+                self._publish_transport(transport_state="http", active=True)
                 self._send(packet)
                 if self.error:
                     return
@@ -509,39 +610,53 @@ class PatternHttpSession:
         except Exception as exc:
             self.error = "PATTERN_UDP_FAILED"
             self.error_detail = str(exc)
+            self._publish_stream_end(None, None, False)
             return False
+        self._publish_transport(
+            transport_state="udp",
+            active=True,
+            stream_id=sid,
+            last_sequence=None,
+            active_failure=None,
+            failure_detail=None,
+        )
         origin = self.clock()
-        for index, step in enumerate(steps):
-            if self._stopped():
-                self.stopped = True
-                self.error = "PATTERN_STOP_REQUESTED"
-                return sent_any
-            packet = step[1]
-            if not isinstance(packet, dict) or packet.get("T") != 1041:
-                self.error = "PACKET_NOT_IN_PATTERN"
-                return sent_any
-            cadence = float(step[2])
-            target = origin + index * cadence
-            now = self.clock()
-            if cadence > 0 and now > target + cadence:
-                self.error = "PATTERN_UDP_LATE"
-                self.error_detail = (
-                    f"sequence {index} is behind by {now - target:.3f}s"
-                )
-                return sent_any
-            if now < target:
-                self.sleep_fn(target - now)
-            try:
-                self.udp_link.send_point(packet, sid, index)
-            except Exception as exc:
-                self.error = "PATTERN_UDP_FAILED"
-                self.error_detail = str(exc)
-                return sent_any
-            sent_any = True
-            self.sent.append(packet)
-            if packet.get("T") in _ARM_T:
-                self.arm_packets += 1
-        return sent_any
+        last_seq = None
+        try:
+            for index, step in enumerate(steps):
+                if self._stopped():
+                    self.stopped = True
+                    self.error = "PATTERN_STOP_REQUESTED"
+                    return sent_any
+                packet = step[1]
+                if not isinstance(packet, dict) or packet.get("T") != 1041:
+                    self.error = "PACKET_NOT_IN_PATTERN"
+                    return sent_any
+                cadence = float(step[2])
+                target = origin + index * cadence
+                now = self.clock()
+                if cadence > 0 and now > target + cadence:
+                    self.error = "PATTERN_UDP_LATE"
+                    self.error_detail = (
+                        f"sequence {index} is behind by {now - target:.3f}s"
+                    )
+                    return sent_any
+                if now < target:
+                    self.sleep_fn(target - now)
+                try:
+                    self.udp_link.send_point(packet, sid, index)
+                except Exception as exc:
+                    self.error = "PATTERN_UDP_FAILED"
+                    self.error_detail = str(exc)
+                    return sent_any
+                sent_any = True
+                last_seq = index
+                self.sent.append(packet)
+                if packet.get("T") in _ARM_T:
+                    self.arm_packets += 1
+            return sent_any
+        finally:
+            self._publish_stream_end(sid, last_seq, sent_any)
 
     def _send(self, packet):
         if not isinstance(packet, dict) or packet.get("T") not in _ALLOWED_T:
@@ -776,7 +891,7 @@ def _run_locally(
                 stream_id_factory,
             )
         session = PatternHttpSession(
-            client, stop_path, sleep_fn, clock, udp_link=udp_link
+            client, stop_path, sleep_fn, clock, udp_link=udp_link, pattern_name=pattern
         )
         try:
             session.execute(steps)
