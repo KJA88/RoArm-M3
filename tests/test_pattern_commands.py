@@ -362,6 +362,11 @@ class PatternCommandTests(unittest.TestCase):
                     udp_socket_factory=udp_socket_factory,
                     stream_id_factory=stream_id_factory,
                 )
+            status_path = Path(runtime) / "transport-status.json"
+            if status_path.is_file():
+                result["transport_status"] = json.loads(
+                    status_path.read_text(encoding="utf-8")
+                )
         result["factory_calls"] = holder.get("built", 0)
         result["sleeps"] = sleeps
         return result
@@ -705,6 +710,16 @@ class PatternCommandTests(unittest.TestCase):
         self.assertEqual(client.calls[2]["z"], 400)
         self.assertEqual(result["final_t105"]["T"], 1051)
         self.assertFalse(result["torque_off_sent"])
+        status = result["transport_status"]
+        self.assertEqual(status["transport_state"], "idle")
+        self.assertFalse(status["active"])
+        self.assertEqual(status["stream_id"], 7)
+        self.assertEqual(status["last_sequence"], 300)
+        self.assertEqual(status["last_completion"]["pattern"], "lissajous")
+        self.assertEqual(status["last_completion"]["sequence"], 300)
+        self.assertEqual(status["udp_target"], "192.168.4.1:4210")
+        self.assertFalse(status["serial_fallback"])
+        self.assertNotEqual(status["transport_state"], "serial")
 
     def test_udp_lateness_aborts_without_bursting(self):
         class Clock:
@@ -741,6 +756,13 @@ class PatternCommandTests(unittest.TestCase):
         self.assertEqual(json.loads(sock.sent[0])["seq"], 0)
         self.assertEqual(result["hardware_action"], "PATTERN_OUTCOME_UNCERTAIN")
         self.assertEqual(result["final_t105"]["T"], 1051)
+        status = result["transport_status"]
+        self.assertEqual(status["transport_state"], "idle")
+        self.assertEqual(status["active_failure"], "PATTERN_UDP_LATE")
+        self.assertEqual(status["stream_id"], 9)
+        self.assertEqual(status["last_sequence"], 0)
+        self.assertEqual(status["last_late"]["sequence"], 0)
+        self.assertFalse(status["serial_fallback"])
 
     def test_udp_send_failure_stops_the_stream(self):
         sock = FakeUdp(fail_at=2)
@@ -755,6 +777,10 @@ class PatternCommandTests(unittest.TestCase):
         self.assertEqual(result["hardware_action"], "PATTERN_OUTCOME_UNCERTAIN")
         self.assertEqual(result["final_t105"]["T"], 1051)
         self.assertTrue(sock.closed)
+        self.assertEqual(
+            result["transport_status"]["active_failure"], "PATTERN_UDP_FAILED"
+        )
+        self.assertFalse(result["transport_status"]["serial_fallback"])
 
     def test_udp_stays_closed_when_preflight_fails(self):
         opened = []
@@ -775,6 +801,7 @@ class PatternCommandTests(unittest.TestCase):
         self.assertEqual(opened, [])
         self.assertEqual(result["reason"], "PREFLIGHT_UNAVAILABLE")
         self.assertEqual(result["factory_calls"], 0)
+        self.assertNotIn("transport_status", result)
 
     def test_spiral_profile_matches_its_lesson_open(self):
         self.assertEqual(
