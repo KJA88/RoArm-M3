@@ -726,6 +726,217 @@ def _signal_pid(pid):
     os.kill(pid, signal.SIGTERM)
 
 
+def _finite_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _discrete_t104(pose):
+    """One Cartesian T104 using the existing discrete-pose fields."""
+    if not isinstance(pose, dict):
+        return None
+    packet = {"T": 104}
+    for key in ("x", "y", "z"):
+        if not _finite_number(pose.get(key)):
+            return None
+        packet[key] = float(pose[key])
+    for key, default in (("t", 0.0), ("r", 0.0), ("spd", 0.5)):
+        value = pose.get(key, default)
+        if not _finite_number(value):
+            return None
+        packet[key] = float(value)
+    return packet
+
+
+def _run_http_steps(
+    steps,
+    *,
+    command,
+    pattern_name,
+    route_text,
+    state_reader,
+    sleep_fn,
+    clock,
+    transport_factory,
+    runtime_dir,
+    pid_alive,
+):
+    """One existing HTTP session. No UDP socket and no serial device."""
+    runtime = Path(runtime_dir)
+    running = _read_pid(runtime)
+    if running is not None and pid_alive(running):
+        return _refused(
+            "PATTERN_ALREADY_RUNNING",
+            command=command,
+            pattern=pattern_name,
+            pid=running,
+        )
+    if route_text is None:
+        route_text = read_arm_route()
+    refused = evaluate_arm_route(route_text)
+    if refused is not None:
+        result = _refused(
+            refused["reason"],
+            command=command,
+            pattern=pattern_name,
+            arm_route=refused.get("arm_route"),
+        )
+        result["sequence_status"] = "STOPPED_ARM_ROUTE"
+        return result
+    adapter = ProductionMotionAdapter(
+        state_reader=state_reader,
+        sleep_fn=sleep_fn,
+    )
+    state, denied, attempts = _fresh_t105_preflight(adapter)
+    fresh = (
+        isinstance(state, dict)
+        and state.get("connected") is True
+        and state.get("fresh") is True
+    )
+    if denied is not None or not fresh:
+        return _refused(
+            "PREFLIGHT_UNAVAILABLE",
+            command=command,
+            pattern=pattern_name,
+            preflight_attempts=attempts,
+            preflight_reason=None if denied is None else denied.get("reason"),
+        )
+    runtime.mkdir(parents=True, exist_ok=True)
+    stop_path = runtime / "stop"
+    stop_path.unlink(missing_ok=True)
+    pid_path = runtime / "pattern.pid"
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    client = None
+    session = None
+    final_t105 = None
+    final_t105_error = None
+    try:
+        if transport_factory is None:
+            from runtime.core.transport.roarm_http import RoArmHttpClient
+
+            client = RoArmHttpClient(
+                os.environ.get("ROARM_HTTP_BASE_URL", "http://192.168.4.1")
+            )
+        else:
+            client = transport_factory()
+        session = PatternHttpSession(
+            client,
+            stop_path,
+            sleep_fn,
+            clock,
+            udp_link=None,
+            pattern_name=pattern_name,
+        )
+        try:
+            session.execute(steps)
+        except PatternClosed:
+            pass
+        final_t105, final_t105_error = _read_final_t105(client)
+    finally:
+        pid_path.unlink(missing_ok=True)
+        if client is not None:
+            close = getattr(client, "close", None)
+            if close is not None:
+                close()
+    sent = 0 if session is None else len(session.sent)
+    arm = 0 if session is None else session.arm_packets
+    outcome = {
+        "authorized": True,
+        "command": command,
+        "pattern": pattern_name,
+        "position_verified": False,
+        "settled_claim": False,
+        "preflight_attempts": attempts,
+        "preflight_fresh": True,
+        "packets_sent": sent,
+        "motion_packets_sent": arm,
+        "torque_off_sent": False,
+        "final_t105": final_t105,
+        "final_t105_error": final_t105_error,
+        "serial_opened": False,
+        "udp_opened": False,
+        "transport": "http",
+    }
+    if session is not None and session.error == "PATTERN_STOP_REQUESTED":
+        outcome.update(
+            ok=False,
+            stopped=True,
+            reason="PATTERN_STOP_REQUESTED",
+            hardware_action="PATTERN_STOPPED" if arm else "NONE",
+        )
+        return outcome
+    if session is not None and session.error:
+        outcome.update(
+            ok=False,
+            reason=session.error,
+            error=session.error_detail,
+            hardware_action="PATTERN_OUTCOME_UNCERTAIN" if arm else "NONE",
+        )
+        return outcome
+    outcome.update(ok=True, reason="PATTERN_FINISHED", hardware_action="PATTERN_HTTP_SENT")
+    return outcome
+
+
+def execute_discrete_pose(
+    pose,
+    *,
+    route_text=None,
+    state_reader=None,
+    sleep_fn=None,
+    clock=None,
+    transport_factory=None,
+    runtime_dir=RUNTIME_DIR,
+    pid_alive=_pid_alive,
+):
+    """Send one existing HTTP T104. Does not open the UDP trajectory path."""
+    if _pattern_pi_entry_depth == 0:
+        return _refused("LOCAL_PATTERN_REFUSED", command="pose")
+    packet = _discrete_t104(pose)
+    if packet is None:
+        return _refused("MALFORMED_POSE", command="pose")
+    return _run_http_steps(
+        [("packet", packet, 0.0)],
+        command="pose",
+        pattern_name="move_to_pose",
+        route_text=route_text,
+        state_reader=state_reader,
+        sleep_fn=time.sleep if sleep_fn is None else sleep_fn,
+        clock=time.perf_counter if clock is None else clock,
+        transport_factory=transport_factory,
+        runtime_dir=runtime_dir,
+        pid_alive=pid_alive,
+    )
+
+
+def execute_engineering_packet(
+    packet,
+    *,
+    route_text=None,
+    state_reader=None,
+    sleep_fn=None,
+    clock=None,
+    transport_factory=None,
+    runtime_dir=RUNTIME_DIR,
+    pid_alive=_pid_alive,
+):
+    """One HTTP packet on the existing discrete plane. Not a UDP stream."""
+    if _pattern_pi_entry_depth == 0:
+        return _refused("LOCAL_PATTERN_REFUSED", command="engineering")
+    if not isinstance(packet, dict) or packet.get("T") not in (_ALLOWED_T - {1041}):
+        return _refused("PACKET_NOT_IN_HTTP_PLANE", command="engineering")
+    return _run_http_steps(
+        [("packet", packet, 0.0)],
+        command="engineering",
+        pattern_name="engineering",
+        route_text=route_text,
+        state_reader=state_reader,
+        sleep_fn=time.sleep if sleep_fn is None else sleep_fn,
+        clock=time.perf_counter if clock is None else clock,
+        transport_factory=transport_factory,
+        runtime_dir=runtime_dir,
+        pid_alive=pid_alive,
+    )
+
+
 def execute_pattern_locally(
     argv,
     *,
