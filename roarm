@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Allowlisted RoArm pattern commands.
+
+  python roarm list
+  python roarm run <name>
+  python roarm stop
+  python roarm torque-off
+
+`list` stays on this machine. On Windows, `run`, `stop`, and
+`torque-off` SSH to the Pi. On the Pi they run in this process.
+`stop` ends further points and leaves torque enabled.
+"""
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from runtime.core.safety.pattern_commands import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
