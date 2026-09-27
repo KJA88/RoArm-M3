@@ -191,4 +191,44 @@ Lesson 06: Vision-guided alignment (authoritative)
 
 Lessons 05–07: Archived, documented, not executed
 
+ADR-008 — Split RoArm Control and Continuous Trajectory Transport
+
+Decision
+RoArm production communication uses HTTP JSON as the control/status plane and sequenced UDP on port 4210 as the continuous T1041 trajectory data plane. USB serial is reserved for firmware flashing, recovery, and diagnostics and is not a production runtime fallback.
+
+Context
+Continuous motion previously shared transports intended for discrete request/response control. Repeated live work exposed dropouts, blocking behavior, and serial-path failures that made trajectory execution fragile and difficult to diagnose.
+
+Why This Won
+
+HTTP remains appropriate for T210, T104, T105, configuration, and other discrete operations
+
+UDP removes per-point request/response overhead from continuous trajectories
+
+Stream ID plus exact sequence enforcement rejects stale, duplicate, skipped, or foreign trajectory packets
+
+A firmware watchdog releases trajectory authority after approximately 100 ms without a valid point
+
+Competing HTTP motion is blocked while UDP owns trajectory authority, while T105 feedback remains available
+
+The Pi refuses execution unless the route to the arm is wlan0 from 192.168.4.2 to 192.168.4.1
+
+A late sender stops instead of bursting delayed points to catch up
+
+Outcome
+
+Lissajous, circle, and spiral execute their existing T1041 geometry over sequenced UDP
+
+HTTP remains around the stream for torque, start pose, return pose, and final status
+
+Serial is not used as a runtime fallback
+
+Live verification on 2026-09-26 completed seven consecutive production trajectory runs totaling 2,785 motion packets with no transport failures
+
+The live-verified baseline is commit f5edfb6df758dffb5ff3764b7d9a91e0d8c8649b
+
+The recovery reference is udp-live-verified-2026-09-26
+
+The detailed contract is documented in docs/00_AUTHORITATIVE/ROARM_TRANSPORT.md
+
 End of Record
